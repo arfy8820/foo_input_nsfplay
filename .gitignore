@@ -1,0 +1,6 @@
+/build/
+/dist/
+/*.log
+/tests/fixtures/
+/.vs/
+*.vcxproj.user
