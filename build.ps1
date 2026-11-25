@@ -2,7 +2,8 @@ param(
     [string]$PlatformToolset,
     [string]$FoobarDirectory,
     [switch]$SkipPreferencesTests,
-    [ValidateSet('x64', 'Win32')][string]$Platform = 'x64'
+    [ValidateSet('x64', 'Win32')][string]$Platform = 'x64',
+    [switch]$ReuseSdkBuild
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
@@ -33,7 +34,13 @@ try {
     $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Force $env:TEMP | Out-Null
     $options = @('/m','/nr:false','/nologo','/v:minimal','/p:Configuration=Release',"/p:Platform=$Platform","/p:PlatformToolset=$PlatformToolset",'/p:TrackFileAccess=false','/p:ForceRebuild=true')
-    & $msbuild (Join-Path $projectRoot 'foo_input_nsfplay.vcxproj') @options
+    if ($ReuseSdkBuild) {
+        & $msbuild (Join-Path $projectRoot 'nsfplay_engine.vcxproj') @options
+        if ($LASTEXITCODE -ne 0) { throw 'NSFPlay engine build failed.' }
+        & $msbuild (Join-Path $projectRoot 'foo_input_nsfplay.vcxproj') @options /p:BuildProjectReferences=false
+    } else {
+        & $msbuild (Join-Path $projectRoot 'foo_input_nsfplay.vcxproj') @options
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Component build failed.' }
     & $msbuild (Join-Path $projectRoot 'engine_smoke.vcxproj') @options /p:BuildProjectReferences=false
     if ($LASTEXITCODE -ne 0) { throw 'Smoke-test build failed.' }
@@ -61,35 +68,11 @@ try {
         $env:PATH = $previousPath
     } else { Write-Warning 'Preferences regression tests explicitly skipped.' }
 
-    $stage = Join-Path $projectRoot "build/package-$Platform"
-    $dllStage = if ($Platform -eq 'Win32') { $stage } else { Join-Path $stage 'x64' }
-    New-Item -ItemType Directory -Force $dllStage,(Join-Path $stage 'notices') | Out-Null
-    Copy-Item -LiteralPath (Join-Path $output 'foo_input_nsfplay.dll') -Destination $dllStage
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $stage
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'USER_GUIDE.md') -Destination $stage
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'VALIDATION.md') -Destination $stage
-    Copy-Item -LiteralPath (Join-Path $projectRoot '../bbbradsmith/nsfplay/readme.txt') -Destination (Join-Path $stage 'notices/nsfplay-readme.txt')
-    Copy-Item -LiteralPath (Join-Path $projectRoot '../SDK-2026-10-01/sdk-license.txt') -Destination (Join-Path $stage 'notices/sdk-license.txt')
-    Copy-Item -LiteralPath (Join-Path $projectRoot '../SDK-2026-10-01/pfc/pfc-license.txt') -Destination (Join-Path $stage 'notices/pfc-license.txt')
+    & (Join-Path $projectRoot 'package.ps1') -Platform $Platform
     $dist = Join-Path $projectRoot 'dist'
-    New-Item -ItemType Directory -Force $dist | Out-Null
-    $packageName = if ($Platform -eq 'Win32') { 'foo_input_nsfplay-x86' } else { 'foo_input_nsfplay' }
-    $zip = Join-Path $dist "$packageName.zip"
-    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    $stream = [IO.File]::Open($zip, [IO.FileMode]::Create)
-    $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
-    try {
-        foreach ($item in Get-ChildItem -LiteralPath $stage -Recurse -File) {
-            $entry = $item.FullName.Substring($stage.Length + 1).Replace('\', '/')
-            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $item.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
-        }
-    } finally { $archive.Dispose(); $stream.Dispose() }
-    $package = Join-Path $dist "$packageName.fb2k-component"
-    Move-Item -LiteralPath $zip -Destination $package -Force
     $dllDist = if ($Platform -eq 'Win32') { Join-Path $dist 'Win32' } else { $dist }
     New-Item -ItemType Directory -Force $dllDist | Out-Null
     Copy-Item -LiteralPath (Join-Path $output 'foo_input_nsfplay.dll') -Destination $dllDist
-    Write-Host "Built and tested: $package"
 } finally {
     $env:TEMP = $oldTemp
     $env:TMP = $oldTmp

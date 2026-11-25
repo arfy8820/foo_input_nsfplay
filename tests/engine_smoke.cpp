@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <set>
+#include "../../bbbradsmith/nsfplay/xgm/player/nsf/nsf.h"
 
 using nsfplay_component::Engine;
 using Bytes = std::vector<uint8_t>;
@@ -24,6 +25,22 @@ static Bytes nsf() {
     b.insert(b.end(), program.begin(), program.end());
     return b;
 }
+static Bytes vrc7_nsf() {
+    auto image=nsf();
+    image.resize(128);
+    image[6]=1;
+    image[123]=0x02;
+    // Instrument, frequency and key-on for VRC7 channel 1. The APU is silent.
+    const Bytes commands={
+        0xa9,0x30,0x8d,0x10,0x90,0xa9,0x10,0x8d,0x30,0x90,
+        0xa9,0x10,0x8d,0x10,0x90,0xa9,0x80,0x8d,0x30,0x90,
+        0xa9,0x20,0x8d,0x10,0x90,0xa9,0x15,0x8d,0x30,0x90,
+        0x60,0x60
+    };
+    image[12]=0x1f;
+    image.insert(image.end(),commands.begin(),commands.end());
+    return image;
+}
 static void chunk(Bytes& b, const char* id, const Bytes& payload) {
     for (unsigned shift=0; shift<32; shift+=8) b.push_back(static_cast<uint8_t>(payload.size() >> shift));
     b.insert(b.end(), id, id+4);
@@ -40,6 +57,28 @@ static Bytes nsfe() {
     chunk(b,"NEND",{});
     return b;
 }
+static void check_upstream_memory_load(Bytes image) {
+    xgm::NSF first, second;
+    require(first.Load(image.data(),static_cast<UINT32>(image.size())), "Upstream NSF memory load failed");
+    require(first.GetSong()==0&&first.GetPlayTime()==300000&&first.GetFadeTime()==5000,
+            "Memory-loaded NSF did not start with plain-file timing");
+    const char* playlist=first.GetPlaylistString("%T",true);
+    const std::string saved_playlist=playlist;
+    require(saved_playlist.find("NSFPlay component smoke test")!=std::string::npos,
+            "Upstream memory playlist title missing");
+    require(second.Load(image.data(),static_cast<UINT32>(image.size())), "Second upstream NSF load failed");
+    const std::string filename(430,'a');
+    std::copy(filename.begin(),filename.end(),second.filename);
+    second.filename[filename.size()]='\0';
+    const std::string long_playlist=second.GetPlaylistString("%F",false);
+    require(long_playlist.starts_with(filename+"::NSF,$01,")&&long_playlist.size()>640,
+            "Long filename/title did not fit in the playlist output");
+    require(saved_playlist==playlist,"A second NSF instance overwrote the first playlist string");
+    require(!first.Load(image.data(),1), "Truncated upstream NSF was accepted");
+    const std::string error=first.LoadError();
+    require(!error.empty()&&second.Load(image.data(),static_cast<UINT32>(image.size()))&&error==first.LoadError(),
+            "A second NSF instance overwrote the first load error");
+}
 static uint64_t decode(Engine& engine) {
     std::array<int16_t,Engine::block_frames*2> pcm;
     uint64_t frames=0;
@@ -49,7 +88,7 @@ static uint64_t decode(Engine& engine) {
         audible |= std::any_of(pcm.begin(),pcm.begin()+got*2,[](int16_t s){return s!=0;});
         require(frames<48000,"Unexpectedly unbounded fixture");
     }
-    require(audible,"Synthetic square wave rendered silence");
+    require(audible,"Synthetic music rendered silence");
     return frames;
 }
 int main(int argc,char** argv) {
@@ -65,6 +104,13 @@ int main(int argc,char** argv) {
         }
         set_value(config,"MASK","4294967295");require(integer(config,"MASK")==4294967295LL,"High mask bits were lost");
         const auto a=nsf(), b=nsfe();
+        check_upstream_memory_load(a);
+        auto vrc7_settings=defaults();
+        vrc7_settings["PLAY_TIME"]="160";
+        vrc7_settings["FADE_TIME"]="20";
+        Engine vrc7(vrc7_nsf(),[]{},vrc7_settings);
+        vrc7.initialize(0,[]{});
+        require(decode(vrc7)>0,"VRC7 fixture did not render");
         Engine plain(a,[]{});
         require(plain.track_count()==2,"NSF subsong count");
         require(plain.info(0,[]{}).seconds==305.0,"Default length/fade changed");
@@ -135,7 +181,7 @@ int main(int argc,char** argv) {
             Engine tagged(b,[]{});tagged.set_overrides(read);require(tagged.info(0,[]{}).seconds==0.17,"Sidecar timing override ignored");
             write_tags(native,{},true);require(read_tags(native).songs.at(1).title.empty(),"Sidecar clear failed");
         }
-        std::cout<<"PASS: 177 settings, validation, persistence, NSF/NSFe, subsongs, PCM, EOF, seek, concurrency, cancellation, masks, mono/rate, infinite/finite policy, telemetry, live controls, memory writes, Unicode sidecars and precise timing\n";
+        std::cout<<"PASS: upstream memory-load timing, per-instance errors and playlists, VRC7, 177 settings, NSF/NSFe PCM, seek, concurrency, masks, live controls and Unicode sidecars\n";
         return 0;
     } catch(const std::exception& e) { std::cerr<<"FAIL: "<<e.what()<<'\n'; return 1; }
 }

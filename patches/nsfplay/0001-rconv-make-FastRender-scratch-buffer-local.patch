@@ -1,0 +1,31 @@
+From f3b9dd527b2da0db758eb2d6e07df474ab67f037 Mon Sep 17 00:00:00 2001
+From: Colton Hill <redacted@invalid>
+Date: Tue, 24 Nov 2026 16:53:23 -0600
+Subject: [PATCH 1/5] rconv: make FastRender scratch buffer local
+
+RateConverter::FastRender used a function-static INT32 t[2] as per-sample
+scratch, so every player instance in the process shared it. Two players
+rendering on different threads overwrote each other's samples, corrupting
+output. Make it a local; single-threaded output is bit-identical.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xgm/devices/Audio/rconv.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/xgm/devices/Audio/rconv.cpp b/xgm/devices/Audio/rconv.cpp
+index 1a44852..1c22bfb 100644
+--- a/xgm/devices/Audio/rconv.cpp
++++ b/xgm/devices/Audio/rconv.cpp
+@@ -161,7 +161,7 @@ inline UINT32 RateConverter::FastRender (INT32 b[2])
+ 
+   //double out[2];
+   INT64 out[2];
+-  static INT32 t[2];
++  INT32 t[2]; // per-call scratch; was static, which was shared by all instances
+ 
+   for(int i=0; i<=mult; i++)
+   {
+-- 
+2.51.2.windows.1
+

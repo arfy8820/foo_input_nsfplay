@@ -1,0 +1,62 @@
+From f75c8b584dec92a571e34c88224aa84a374ba703 Mon Sep 17 00:00:00 2001
+From: Colton Hill <redacted@invalid>
+Date: Tue, 24 Nov 2026 16:55:26 -0600
+Subject: [PATCH 2/5] nsf: make load error strings per-instance
+
+nsf_error, nsfe_error and the nsfe_error_ buffer were file-static in nsf.cpp,
+so concurrent loads in different NSF objects could report each other's errors
+or read a buffer mid-write. Move them into the NSF class; LoadError() and all
+uses are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xgm/player/nsf/nsf.cpp | 9 +++------
+ xgm/player/nsf/nsf.h   | 5 +++++
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/xgm/player/nsf/nsf.cpp b/xgm/player/nsf/nsf.cpp
+index 9ce24c8..7d0bc70 100644
+--- a/xgm/player/nsf/nsf.cpp
++++ b/xgm/player/nsf/nsf.cpp
+@@ -22,12 +22,6 @@ namespace xgm
+ UINT8 CONVERT_REGN[4]      = { 0x01, 0x02, 0x03, 0x03 }; // NTSC, PAL, DUAL, DUAL
+ int   CONVERT_REGN_PREF[4] = {   -1,   -1,    0,    1 }; // Any,  Any, NTSC,  PAL
+ 
+-const int NSFE_ERROR_SIZE = 256;
+-static char nsfe_error_[NSFE_ERROR_SIZE];
+-
+-static const char* nsfe_error = "(no NSFe loaded)";
+-static const char* nsf_error = "(no NSF loaded)";
+-
+ void sjis_legacy(char* s, const unsigned int length)
+ {
+ 	bool utf8 = true;
+@@ -76,6 +70,9 @@ void sjis_legacy(char* s, const unsigned int length)
+   NSF::NSF ():SoundDataMSP ()
+   {
+     body = NULL;
++    nsfe_error_[0] = 0;
++    nsfe_error = "(no NSFe loaded)";
++    nsf_error = "(no NSF loaded)";
+     default_playtime = 5 * 60 * 1000;
+     default_fadetime = 5 * 1000;
+     default_loopnum = 0;
+diff --git a/xgm/player/nsf/nsf.h b/xgm/player/nsf/nsf.h
+index 52b1cc6..6fb4716 100644
+--- a/xgm/player/nsf/nsf.h
++++ b/xgm/player/nsf/nsf.h
+@@ -34,6 +34,11 @@ namespace xgm
+     UINT16 play_address;
+     char filename[NSF_MAX_PATH];
+     char print_title[256+64]; // margin 64 chars.
++    // last load error messages, per instance (were file-static and shared)
++    enum { NSFE_ERROR_SIZE = 256 };
++    char nsfe_error_[NSFE_ERROR_SIZE];
++    const char* nsfe_error;
++    const char* nsf_error;
+     char title_nsf[128];
+     char artist_nsf[128];
+     char copyright_nsf[128];
+-- 
+2.51.2.windows.1
+

@@ -1,0 +1,46 @@
+From 915e05e2a9f4c27d0661db27ec89391742353ece Mon Sep 17 00:00:00 2001
+From: Colton Hill <redacted@invalid>
+Date: Tue, 24 Nov 2026 17:51:09 -0600
+Subject: [PATCH 5/5] nsf: initialize playlist/timing fields in the constructor
+
+time_in_ms, loop_in_ms, fade_in_ms, loop_num, playtime_unknown, playlist_mode,
+title_unknown, song and filename were only set by LoadFile (from its playlist
+entry). Loading with NSF::Load from memory left them uninitialized, so track
+length and fade were garbage; when they happened to be 0, GetFadeTime returned
+50 ms and every plain NSF track faded out almost immediately. Initialize them
+to LoadFile's values for a plain file with no m3u entry. LoadFile still
+overrides them, so existing front ends are unaffected.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xgm/player/nsf/nsf.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/xgm/player/nsf/nsf.cpp b/xgm/player/nsf/nsf.cpp
+index 98d2835..dec61b6 100644
+--- a/xgm/player/nsf/nsf.cpp
++++ b/xgm/player/nsf/nsf.cpp
+@@ -77,6 +77,20 @@ void sjis_legacy(char* s, const unsigned int length)
+     default_fadetime = 5 * 1000;
+     default_loopnum = 0;
+ 
++    // Playlist/timing state. LoadFile sets these from its playlist entry, but
++    // Load (from memory) does not, so give them LoadFile's values for a plain
++    // file with no m3u entry. Previously uninitialized after Load().
++    filename[0] = 0;
++    song = 0;
++    playlist_mode = false;
++    title_unknown = true;
++    enable_multi_tracks = true;
++    time_in_ms = -1;
++    loop_in_ms = -1;
++    fade_in_ms = -1;
++    loop_num = -1;
++    playtime_unknown = true;
++
+     title_nsf[0] = 0;
+     artist_nsf[0] = 0;
+     copyright_nsf[0] = 0;
+-- 
+2.51.2.windows.1
+

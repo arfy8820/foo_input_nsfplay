@@ -1,0 +1,100 @@
+From 74d25f16d15a51e83c2f26a5b94009d5545980f3 Mon Sep 17 00:00:00 2001
+From: Arthur Pirika <10070146+arfy8820@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 10:22:52 +0800
+Subject: [PATCH] Bound NSF title formatting and guard OPLL warm-up allocation
+
+---
+ xgm/devices/Sound/nes_vrc7.cpp |  2 +-
+ xgm/player/nsf/nsf.cpp         | 20 +++++++++++++-------
+ xgm/player/nsf/nsf.h           |  2 +-
+ 3 files changed, 15 insertions(+), 9 deletions(-)
+
+diff --git a/xgm/devices/Sound/nes_vrc7.cpp b/xgm/devices/Sound/nes_vrc7.cpp
+index d9e8e6a..e1c2095 100644
+--- a/xgm/devices/Sound/nes_vrc7.cpp
++++ b/xgm/devices/Sound/nes_vrc7.cpp
+@@ -11,7 +11,7 @@ namespace
+ {
+   struct EMU2413_TableInit
+   {
+-    EMU2413_TableInit () { OPLL_delete (OPLL_new (3579545, 49716)); }
++    EMU2413_TableInit () { if (OPLL *opll = OPLL_new (3579545, 49716)) OPLL_delete (opll); }
+   } emu2413_table_init;
+ }
+ 
+diff --git a/xgm/player/nsf/nsf.cpp b/xgm/player/nsf/nsf.cpp
+index dec61b6..07dbe4b 100644
+--- a/xgm/player/nsf/nsf.cpp
++++ b/xgm/player/nsf/nsf.cpp
+@@ -200,6 +200,12 @@ void sjis_legacy(char* s, const unsigned int length)
+ 
+     print_title[wp] = '\0';
+ 
++    auto append_title = [&](const char *text)
++    {
++      while (*text && wp < static_cast<int>(sizeof(print_title)) - 1)
++        print_title[wp++] = *text++;
++    };
++
+     while(wp<256&&*format)
+     {
+       if(*format=='%')
+@@ -208,35 +214,35 @@ void sjis_legacy(char* s, const unsigned int length)
+         {
+         case 'F':
+         case 'f':
+-          wp += sprintf(print_title+wp, "%s", fname);
++          append_title(fname);
+           format++;
+           break;
+         case 'P':
+         case 'p':
+-          wp += sprintf(print_title+wp, "%s", fpath);
++          append_title(fpath);
+           format++;
+           break;
+         case 'T':
+         case 't':
+-          wp += sprintf(print_title+wp, "%s", this->title);
++          append_title(this->title);
+           format++;
+           break;
+         case 'A':
+         case 'a':
+           if (nsfe_entry[nsfe_ei].taut[0] != 0)
+-            wp += sprintf(print_title+wp, "%s", nsfe_entry[nsfe_ei].taut);
++            append_title(nsfe_entry[nsfe_ei].taut);
+           else
+-            wp += sprintf(print_title+wp, "%s", this->artist);
++            append_title(this->artist);
+           format++;
+           break;
+         case 'C':
+         case 'c':
+-          wp += sprintf(print_title+wp, "%s", this->copyright);
++          append_title(this->copyright);
+           format++;
+           break;
+         case 'L':
+         case 'l':
+-          wp += sprintf(print_title+wp, "%s", nsfe_entry[nsfe_ei].tlbl);
++          append_title(nsfe_entry[nsfe_ei].tlbl);
+           format++;
+           break;
+         case 'N':
+diff --git a/xgm/player/nsf/nsf.h b/xgm/player/nsf/nsf.h
+index 48916e7..22c589d 100644
+--- a/xgm/player/nsf/nsf.h
++++ b/xgm/player/nsf/nsf.h
+@@ -39,7 +39,7 @@ namespace xgm
+     char nsfe_error_[NSFE_ERROR_SIZE];
+     const char* nsfe_error;
+     const char* nsf_error;
+-    char playlist_string[NSF_MAX_PATH + 128]; // GetPlaylistString result (was static)
++    char playlist_string[NSF_MAX_PATH + 2 * sizeof(print_title) + 128]; // GetPlaylistString result (was static)
+     char title_nsf[128];
+     char artist_nsf[128];
+     char copyright_nsf[128];
+-- 
+2.56.0.windows.4
+

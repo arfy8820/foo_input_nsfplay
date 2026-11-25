@@ -1,4 +1,14 @@
-# 0.2.3 Win32 validation
+# 0.2.4 patched engine and unified package
+
+Built both architectures on 25 November 2026 with MSVC v145 and foobar2000 SDK 2026-10-01. The engine includes all five supplied patches on upstream `6af5406` and a follow-up to bound title and playlist formatting and guard OPLL warm-up allocation. Replaying the six patch files in a clean checkout reproduced the same engine tree.
+
+- The engine smoke tests passed on x86 and x64, including upstream memory-load timing, per-instance load errors and playlist strings, and audible VRC7 playback.
+- The native-window accessibility suites and isolated foobar2000 host suites passed on both architectures. They exercised Preferences, inspector navigation, decoding, seeking, cancellation, Unicode metadata and ReplayGain.
+- The unified archive contains the 32-bit DLL at its root and the 64-bit DLL under `x64/`. Both entries match the binaries exercised in the isolated host tests.
+
+Live NVDA and the interactive component installation dialog remain untested for this build.
+
+## 0.2.3 Win32 validation
 
 Built on 25 November 2026 with MSVC v145 and foobar2000 SDK 2026-10-01. The Win32 build uses the same decoder and UI source as x64.
 

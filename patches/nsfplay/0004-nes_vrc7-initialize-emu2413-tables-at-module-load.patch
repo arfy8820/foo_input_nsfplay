@@ -1,0 +1,46 @@
+From 3661f6258a3ce4f535972bc4d6fa619716dc43d2 Mon Sep 17 00:00:00 2001
+From: Colton Hill <redacted@invalid>
+Date: Tue, 24 Nov 2026 17:16:57 -0600
+Subject: [PATCH 4/5] nes_vrc7: initialize emu2413 tables at module load
+
+emu2413 builds its lookup tables lazily in the first OPLL_new() with an
+unsynchronized flag. Every NSFPlayer constructs an NES_VRC7, so two players
+created concurrently before any other could race on the table writes. Create
+and discard one OPLL from a static initializer so the tables exist before any
+threads start. A function-local static was avoided because thread-safe
+statics are unreliable in LoadLibrary'd DLLs on Windows XP (v141_xp builds,
+e.g. the Winamp plugin). Output is bit-identical.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xgm/devices/Sound/nes_vrc7.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/xgm/devices/Sound/nes_vrc7.cpp b/xgm/devices/Sound/nes_vrc7.cpp
+index 4123fb3..d9e8e6a 100644
+--- a/xgm/devices/Sound/nes_vrc7.cpp
++++ b/xgm/devices/Sound/nes_vrc7.cpp
+@@ -1,6 +1,20 @@
+ #include <cstring>
+ #include "nes_vrc7.h"
+ 
++// emu2413 builds its lookup tables lazily inside the first OPLL_new(), with no
++// locking, so two players constructed at the same time on different threads
++// could race on them. Create and discard one OPLL during static initialization
++// (module load, before any threads exist) so the tables are always ready.
++// A function-local static would be lazy instead, but thread-safe statics are
++// unreliable in dynamically loaded DLLs on Windows XP (v141_xp builds).
++namespace
++{
++  struct EMU2413_TableInit
++  {
++    EMU2413_TableInit () { OPLL_delete (OPLL_new (3579545, 49716)); }
++  } emu2413_table_init;
++}
++
+ namespace xgm
+ {
+   NES_VRC7::NES_VRC7 ()
+-- 
+2.51.2.windows.1
+

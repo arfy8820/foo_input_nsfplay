@@ -1,0 +1,155 @@
+From b4de2e9a9b6a253a81f7d2638d18fa44654515f9 Mon Sep 17 00:00:00 2001
+From: Colton Hill <redacted@invalid>
+Date: Tue, 24 Nov 2026 16:59:21 -0600
+Subject: [PATCH 3/5] nsf, nsfplay, ppls: replace static return buffers with
+ per-instance storage
+
+NSFPlayer::GetTitleString and NSF::GetPlaylistString returned pointers into
+function-static buffers, and both print_time helpers (nsf.cpp, ppls.cpp)
+formatted into a static buffer, so concurrent players could overwrite each
+other's strings. GetTitleString and GetPlaylistString now return member
+buffers (same signatures, same lifetime as the object); print_time writes
+into a caller-supplied buffer. GetTitleString also uses snprintf.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xgm/player/nsf/nsf.cpp      | 13 +++++++------
+ xgm/player/nsf/nsf.h        |  1 +
+ xgm/player/nsf/nsfplay.cpp  |  5 ++---
+ xgm/player/nsf/nsfplay.h    |  1 +
+ xgm/player/nsf/pls/ppls.cpp | 11 ++++++-----
+ 5 files changed, 17 insertions(+), 14 deletions(-)
+
+diff --git a/xgm/player/nsf/nsf.cpp b/xgm/player/nsf/nsf.cpp
+index 7d0bc70..98d2835 100644
+--- a/xgm/player/nsf/nsf.cpp
++++ b/xgm/player/nsf/nsf.cpp
+@@ -103,9 +103,9 @@ void sjis_legacy(char* s, const unsigned int length)
+     default_loopnum = l;
+   }
+ 
+-  static const char *print_time (int time)
++  // buf must hold at least 32 chars
++  static const char *print_time (int time, char *buf)
+   {
+-    static char buf[32];
+     int h, m, s = 0;
+ 
+     if (time < 0)
+@@ -128,7 +128,8 @@ void sjis_legacy(char* s, const unsigned int length)
+ 
+   const char *NSF::GetPlaylistString (const char *format, bool b)
+   {
+-    static char buf[NSF_MAX_PATH + 128];
++    char *buf = playlist_string;
++    char tbuf[32];
+     char *p = buf;
+ 
+     const char *t = GetTitleString (format);
+@@ -145,17 +146,17 @@ void sjis_legacy(char* s, const unsigned int length)
+     if (b)
+     {
+       if (time_in_ms >= 0)
+-        p += sprintf (p, ",%s", print_time (time_in_ms));
++        p += sprintf (p, ",%s", print_time (time_in_ms, tbuf));
+       else
+         p += sprintf (p, ",");
+ 
+       if (loop_in_ms >= 0)
+-        p += sprintf (p, ",%s", print_time (loop_in_ms));
++        p += sprintf (p, ",%s", print_time (loop_in_ms, tbuf));
+       else
+         p += sprintf (p, ",");
+ 
+       if (fade_in_ms >= 0)
+-        p += sprintf (p, ",%s", print_time (fade_in_ms));
++        p += sprintf (p, ",%s", print_time (fade_in_ms, tbuf));
+     }
+ 
+     (*p) = '\0';
+diff --git a/xgm/player/nsf/nsf.h b/xgm/player/nsf/nsf.h
+index 6fb4716..48916e7 100644
+--- a/xgm/player/nsf/nsf.h
++++ b/xgm/player/nsf/nsf.h
+@@ -39,6 +39,7 @@ namespace xgm
+     char nsfe_error_[NSFE_ERROR_SIZE];
+     const char* nsfe_error;
+     const char* nsf_error;
++    char playlist_string[NSF_MAX_PATH + 128]; // GetPlaylistString result (was static)
+     char title_nsf[128];
+     char artist_nsf[128];
+     char copyright_nsf[128];
+diff --git a/xgm/player/nsf/nsfplay.cpp b/xgm/player/nsf/nsfplay.cpp
+index 2109cdb..33f7db5 100644
+--- a/xgm/player/nsf/nsfplay.cpp
++++ b/xgm/player/nsf/nsfplay.cpp
+@@ -72,9 +72,8 @@ namespace xgm
+   {
+     if (nsf == NULL) return "(not loaded)";
+ 
+-    static char buf[512];
+-    sprintf (buf, "%s", nsf->GetTitleString((*config)["TITLE_FORMAT"]));
+-    return buf;
++    snprintf (title_string, sizeof(title_string), "%s", nsf->GetTitleString((*config)["TITLE_FORMAT"]));
++    return title_string;
+   }
+ 
+   bool NSFPlayer::Load (SoundData * sdat)
+diff --git a/xgm/player/nsf/nsfplay.h b/xgm/player/nsf/nsfplay.h
+index 51be716..509671c 100644
+--- a/xgm/player/nsf/nsfplay.h
++++ b/xgm/player/nsf/nsfplay.h
+@@ -48,6 +48,7 @@ namespace xgm
+     int time_in_ms;             // ââëtÇµÇΩéûä‘(ms)
+     bool playtime_detected;     // ââëtéûä‘Ç™åüèoÇ≥ÇÍÇΩÇÁtrue
+     bool infinite;               // never fade out
++    char title_string[512];      // GetTitleString result (was static)
+ 
+     void Reload ();
+     void DetectLoop ();
+diff --git a/xgm/player/nsf/pls/ppls.cpp b/xgm/player/nsf/pls/ppls.cpp
+index 9b71d67..4aeaf0f 100644
+--- a/xgm/player/nsf/pls/ppls.cpp
++++ b/xgm/player/nsf/pls/ppls.cpp
+@@ -326,9 +326,9 @@ void PLSITEM_delete(PLSITEM *elem)
+   free(elem) ;
+ }
+ 
+-static const char *print_time(int time)
++// buf must hold at least 32 chars
++static const char *print_time(int time, char *buf)
+ {
+-  static char buf[32] ;
+   int h,m,s = 0 ;
+ 
+   if(time<0) return "" ;
+@@ -409,6 +409,7 @@ char *PLSITEM_print(PLSITEM *elem, char *buf, char *plsfile)
+   int i = 0 , length ;
+   char *p = buf ;
+   char file_path[256], pls_path[256], file_name[256], pls_name[256], rel_path[256] ;
++  char tbuf[32] ;
+ 
+   if(plsfile)
+   {
+@@ -437,15 +438,15 @@ char *PLSITEM_print(PLSITEM *elem, char *buf, char *plsfile)
+ 
+   *(p++) = ',' ;
+   if(elem->time_in_ms>=0)
+-    p += sprintf(p,"%s", print_time(elem->time_in_ms)) ;
++    p += sprintf(p,"%s", print_time(elem->time_in_ms, tbuf)) ;
+   
+   *(p++) = ',' ;
+   if(elem->loop_in_ms>=0)
+-    p += sprintf(p,"%s", print_time(elem->loop_in_ms)) ;
++    p += sprintf(p,"%s", print_time(elem->loop_in_ms, tbuf)) ;
+ 
+   *(p++) = ',' ;
+   if(elem->fade_in_ms>=0)
+-    p += sprintf(p,"%s", print_time(elem->fade_in_ms)) ;
++    p += sprintf(p,"%s", print_time(elem->fade_in_ms, tbuf)) ;
+   
+   *(p++) = ',' ;
+   if(elem->loop_num>=0)
+-- 
+2.51.2.windows.1
+

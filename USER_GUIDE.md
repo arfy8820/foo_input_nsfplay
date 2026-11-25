@@ -1,10 +1,10 @@
-# NSFPlay 0.2.3
+# NSFPlay 0.2.4
 
 0.2.1 fixes the preferences-opening pure virtual call in 0.2.0. The page and docked inspector create their windows after their reference-counted service objects are fully constructed. Preferences initialization notifications cannot be mistaken for user edits.
 
 ## Install and open
 
-Get the package for your player from [GitHub Releases](https://github.com/arfy8820/foo_input_nsfplay/releases/latest). Use `foo_input_nsfplay.fb2k-component` for 64-bit foobar2000 or `foo_input_nsfplay-x86.fb2k-component` for 32-bit foobar2000. In foobar2000, select **Preferences > Components > Install**, choose the package, apply and restart. Local builds put the corresponding package in `dist/`. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
+The unified installer, `foo_input_nsfplay-unified.fb2k-component`, works with 32-bit and 64-bit foobar2000. In foobar2000, select **Preferences > Components > Install**, choose the package, apply and restart. Local builds also produce individual installers under `dist/`. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
 
 Saved settings are under **Preferences > Playback > Decoding > NSFPlay**. The live interface is under **View > NSFPlay > Playback inspector**, or can be added as **NSFPlay inspector** in Default UI layout editing mode. Recent hosts also expose its automatic Playback Information command.
 
@@ -61,6 +61,8 @@ git clone https://github.com/arfy8820/foo_input_nsfplay.git
 New-Item -ItemType Directory -Force bbbradsmith | Out-Null
 git clone https://github.com/bbbradsmith/nsfplay.git bbbradsmith/nsfplay
 git -C bbbradsmith/nsfplay checkout --detach 6af5406e3325b5507bea1ae1a57c77d5efe5c7f3
+$enginePatches = (Get-ChildItem foo_input_nsfplay/patches/nsfplay/*.patch | Sort-Object Name).FullName
+git -C bbbradsmith/nsfplay am --keep-cr @enginePatches
 ```
 
 Extract the [foobar2000 SDK 2026-10-01](https://www.foobar2000.org/SDK) into `SDK-2026-10-01` at the workspace root. Its `foobar2000` and `pfc` directories should sit directly under `SDK-2026-10-01`. The resulting layout is:
@@ -78,11 +80,14 @@ From `foo_input_nsfplay`, build and test:
 .\build.ps1
 .\build.ps1 -PlatformToolset v145
 .\build.ps1 -Platform Win32
+.\package.ps1 -Platform Both
 # Process-only override if local script execution is disabled:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 This builds x64 Release by default. `-Platform Win32` builds x86 Release and produces `dist/foo_input_nsfplay-x86.fb2k-component`. Either build runs engine/settings/sidecar smoke tests and generates original synthetic music under `tests/fixtures`. SDK references also create intermediates in the SDK tree. The script supports MSVC v143/v145. The component uses the Visual C++ runtime.
+
+Run `package.ps1 -Platform Both` after building both architectures from the same source. It checks each DLL’s architecture and packages them as `dist/foo_input_nsfplay-unified.fb2k-component`.
 
 The normal build also runs `preferences_smoke.exe` against the actual preferences/inspector implementation. It creates its own windows and an isolated test profile. Its SDK dependencies use `shared.dll` from a foobar2000 installation of the same architecture. Pass `-FoobarDirectory` to use a different directory. `-SkipPreferencesTests` explicitly permits building without that regression check.
 
@@ -95,16 +100,16 @@ Optional integration tests copy an installed x64 player into an isolated workspa
 
 The test-only component verifies portable mode/profile location before changing configuration. It checks host registration, audio chunks, subsongs, EOF, seeking, cancellation, sidecars, custom/multivalue metadata and ReplayGain. Results go to `build/host-validation/fixtures/host-smoke.txt` for x64 or `build/host-validation-Win32/fixtures/host-smoke.txt` for x86.
 
-Core smoke coverage includes 177 defaults, validation/INI round trips, high mask bits, mono/rate changes, loop policies, chip telemetry, queued controls, memory writes, concurrency, cancellation and Unicode sidecars. Synthetic fixtures exercise the base APU; they do not replace an expansion-chip music corpus.
+Core smoke coverage includes 177 defaults, validation and INI round trips, high mask bits, mono and sample rate changes, loop policies, chip telemetry, queued controls, memory writes, concurrency, cancellation and Unicode sidecars. Synthetic fixtures exercise the base APU and VRC7.
 
-The inherited engine is protected by a cancellable component-wide lock because it has shared mutable tables/buffers. Instances have separate settings/state, but parallel conversions serialize inside the emulator. Noise/triangle randomization remains configurable and enabled by default, so exact PCM reproducibility across restarts is not promised. Input is capped at 16 MiB; invalid chunk sizes, song indices and over-capacity banked programs are rejected.
+The engine retains a cancellable component-wide lock around emulation because the patched core still uses shared facilities such as randomization. Noise and triangle randomization remain configurable and enabled by default. Input is capped at 16 MiB. Invalid chunk sizes, song indices and over-capacity banked programs are rejected.
 
-**Visual QA remains outstanding:** computer-use access to foobar2000 was not approved in this session. Dark-mode hooks, DPI handling and keyboard navigation are implemented, but visual layout, screen-reader behavior and interactive controls require in-player review. This functional port is not a claim of exhaustive compatibility or expansion-chip release QA.
+Live NVDA, visual layout, theme changes and broader expansion-chip playback remain areas for in-player testing.
 
-See `VALIDATION.md` for the specific passed checks and the unsuccessful isolated-host startup test. The current package is a port candidate pending host QA.
+See `VALIDATION.md` for architecture-specific results and remaining interactive checks.
 
 ## Source and notices
 
-`settings.cpp` defines the schema; `host.cpp` handles configuration/session selection; `input.cpp` implements decoder and metadata services; `engine.cpp` adapts NSFPlay/telemetry; `tags.cpp` handles sidecars; `ui.cpp` provides preferences and the inspector. Upstream source is linked without modifications.
+`settings.cpp` defines the schema, `host.cpp` handles configuration and session selection, and `input.cpp` implements decoder and metadata services. `engine.cpp` adapts NSFPlay and its telemetry, `tags.cpp` handles sidecars, and `ui.cpp` provides Preferences and the inspector. The patch series is in `patches/nsfplay`.
 
 NSFPlay by Brezza, maintained by Brad Smith: https://bbbradsmith.github.io/nsfplay/ . Baseline: `6af5406e3325b5507bea1ae1a57c77d5efe5c7f3`. Retain original source notices. Packaged notices cover the NSFPlay README and foobar2000 SDK/PFC; other third-party notices remain in upstream headers.
