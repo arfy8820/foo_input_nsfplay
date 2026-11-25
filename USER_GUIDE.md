@@ -1,14 +1,14 @@
-# NSFPlay x64 0.2.3
+# NSFPlay 0.2.3
 
 0.2.1 fixes the preferences-opening pure virtual call in 0.2.0. The page and docked inspector create their windows after their reference-counted service objects are fully constructed. Preferences initialization notifications cannot be mistaken for user edits.
 
 ## Install and open
 
-In 64-bit foobar2000, select **Preferences > Components > Install**, choose the `foo_input_nsfplay.fb2k-component` file, apply and restart. Get the file from [GitHub Releases](https://github.com/arfy8820/foo_input_nsfplay/releases/latest) or from `dist/` after a local build. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
+Get the package for your player from [GitHub Releases](https://github.com/arfy8820/foo_input_nsfplay/releases/latest). Use `foo_input_nsfplay.fb2k-component` for 64-bit foobar2000 or `foo_input_nsfplay-x86.fb2k-component` for 32-bit foobar2000. In foobar2000, select **Preferences > Components > Install**, choose the package, apply and restart. Local builds put the corresponding package in `dist/`. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
 
 Saved settings are under **Preferences > Playback > Decoding > NSFPlay**. The live interface is under **View > NSFPlay > Playback inspector**, or can be added as **NSFPlay inspector** in Default UI layout editing mode. Recent hosts also expose its automatic Playback Information command.
 
-The target is Windows x64 with foobar2000 2.0 or newer. There is no ARM-specific binary or Columns UI-specific panel adapter; the standalone inspector works independently of the active layout. No Winamp or MFC UI DLL is required.
+The x64 and Win32 builds use the same decoder, settings and inspector with foobar2000 2.0 or newer. MSVC v145 targets Windows 10 or newer. Windows 7 support would require a compatible toolset and runtime plus validation on Windows 7. The standalone inspector works independently of the active UI layout. No Winamp or MFC UI DLL is required.
 
 ## Preferences and presets
 
@@ -77,21 +77,23 @@ From `foo_input_nsfplay`, build and test:
 ```powershell
 .\build.ps1
 .\build.ps1 -PlatformToolset v145
+.\build.ps1 -Platform Win32
 # Process-only override if local script execution is disabled:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-This builds x64 Release, runs engine/settings/sidecar smoke tests, generates original synthetic music under `tests/fixtures`, and packages `dist/foo_input_nsfplay.fb2k-component`. SDK references also create intermediates in the SDK tree. The script supports MSVC v143/v145. The component uses the Visual C++ runtime normally supplied with current foobar2000.
+This builds x64 Release by default. `-Platform Win32` builds x86 Release and produces `dist/foo_input_nsfplay-x86.fb2k-component`. Either build runs engine/settings/sidecar smoke tests and generates original synthetic music under `tests/fixtures`. SDK references also create intermediates in the SDK tree. The script supports MSVC v143/v145. The component uses the Visual C++ runtime.
 
-The normal build also runs `preferences_smoke.exe` against the actual preferences/inspector implementation. It creates its own windows and an isolated test profile, without starting or controlling foobar2000. Its SDK dependencies use the installed x64 player's `shared.dll`; pass `-FoobarDirectory` if installed elsewhere. `-SkipPreferencesTests` explicitly permits building without that regression check.
+The normal build also runs `preferences_smoke.exe` against the actual preferences/inspector implementation. It creates its own windows and an isolated test profile. Its SDK dependencies use `shared.dll` from a foobar2000 installation of the same architecture. Pass `-FoobarDirectory` to use a different directory. `-SkipPreferencesTests` explicitly permits building without that regression check.
 
 Optional integration tests copy an installed x64 player into an isolated workspace folder:
 
 ```powershell
 .\test-host.ps1 -FoobarDirectory 'C:\Program Files\foobar2000' -PlatformToolset v145
+.\test-host.ps1 -Platform Win32 -FoobarDirectory 'C:\Program Files (x86)\foobar2000' -PlatformToolset v145
 ```
 
-The test-only component verifies portable mode/profile location before changing configuration. It checks host registration, audio chunks, subsongs, EOF, seeking, cancellation, sidecars, custom/multivalue metadata and ReplayGain. It is excluded from the release package. Results go to `build/host-validation/fixtures/host-smoke.txt`.
+The test-only component verifies portable mode/profile location before changing configuration. It checks host registration, audio chunks, subsongs, EOF, seeking, cancellation, sidecars, custom/multivalue metadata and ReplayGain. Results go to `build/host-validation/fixtures/host-smoke.txt` for x64 or `build/host-validation-Win32/fixtures/host-smoke.txt` for x86.
 
 Core smoke coverage includes 177 defaults, validation/INI round trips, high mask bits, mono/rate changes, loop policies, chip telemetry, queued controls, memory writes, concurrency, cancellation and Unicode sidecars. Synthetic fixtures exercise the base APU; they do not replace an expansion-chip music corpus.
 

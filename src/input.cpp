@@ -15,7 +15,7 @@
 #include <filesystem>
 
 DECLARE_COMPONENT_VERSION("NSFPlay input", "0.2.3",
-    "x64 NSF/NSFe decoder with preferences, mixer and chip inspector.\n"
+    "NSF/NSFe decoder with preferences, mixer and chip inspector.\n"
     "NSFPlay by Brezza, maintained by Brad Smith.\n"
     "https://bbbradsmith.github.io/nsfplay/");
 VALIDATE_COMPONENT_FILENAME("foo_input_nsfplay.dll");

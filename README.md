@@ -1,4 +1,4 @@
-# NSFPlay input for foobar2000 - x64 0.2.3
+# NSFPlay input for foobar2000 0.2.3
 
 0.2.3 adds labeled keyboard selectors for all 32 channels and eight devices in the playback inspector. The selected item's mute checkbox and mixer controls follow the selector in the tab order.
 
@@ -8,7 +8,7 @@
 
 Native NSF/NSFe decoding with all 177 inventoried settings, preferences, presets, device/channel mixers, 32-channel masks, keyboard/waveform and file-information displays, memory tools, sidecar metadata and ReplayGain.
 
-Download `foo_input_nsfplay.fb2k-component` from [GitHub Releases](https://github.com/arfy8820/foo_input_nsfplay/releases/latest). In 64-bit foobar2000, open **Preferences > Components > Install**, select the downloaded package, apply and restart.
+Get the package for your player from [GitHub Releases](https://github.com/arfy8820/foo_input_nsfplay/releases/latest). Use `foo_input_nsfplay.fb2k-component` for 64-bit foobar2000 or `foo_input_nsfplay-x86.fb2k-component` for 32-bit foobar2000. Open **Preferences > Components > Install**, select the matching package, apply and restart.
 
 - Saved settings: Preferences > Playback > Decoding > NSFPlay.
 - Live controls: View > NSFPlay > Playback inspector, or the NSFPlay inspector Default UI element.

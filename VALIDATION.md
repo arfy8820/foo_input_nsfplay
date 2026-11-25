@@ -1,4 +1,14 @@
-# 0.2.3 validation record
+# 0.2.3 Win32 validation
+
+Built on 25 November 2026 with MSVC v145 and foobar2000 SDK 2026-10-01. The Win32 build uses the same decoder and UI source as x64.
+
+- The x86 engine and native-window accessibility suites passed. Coverage includes NSF/NSFe playback, all 177 settings, presets and Unicode sidecars, the FDS preferences, and keyboard access to all 32 channels and eight devices in the inspector.
+- The isolated 32-bit foobar2000 2.26.3 test passed on Windows 11. It verified decoder registration, NSF/NSFe subsongs, audio output and seeking, cancellation, Unicode metadata and ReplayGain, and registration of Preferences and the Default UI inspector.
+- The x86 package contains one DLL at the archive root. Its PE architecture is x86, it exports `foobar2000_get_interface`, and it matches the separately built DLL.
+
+This build uses v145 and targets Windows 10 or newer. A Windows 7 build and live NVDA testing of the x86 inspector are still outstanding.
+
+## 0.2.3 x64 validation
 
 The x64 Release component was built with v145 using the existing engine and SDK libraries. Both smoke-test suites passed. The native-window test checks the inspector's accessible selector labels and every item in the Windows accessibility tree, keyboard traversal across all 32 channels and eight devices, mute and unmute, channel and device gain, pan, master gain, channel activity, and the tab order on all four inspector tabs.
 
