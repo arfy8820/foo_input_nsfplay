@@ -14,7 +14,7 @@
 #include "tags.h"
 #include <filesystem>
 
-DECLARE_COMPONENT_VERSION("NSFPlay input", "0.2.4",
+DECLARE_COMPONENT_VERSION("NSFPlay", "0.3.0",
     "NSF/NSFe decoder with preferences, mixer and chip inspector.\n"
     "NSFPlay by Brezza, maintained by Brad Smith.\n"
     "https://bbbradsmith.github.io/nsfplay/");
@@ -85,7 +85,7 @@ public:
         info.info_set_int("channels", engine_->output_channels());
         info.info_set_int("bitspersample", 16);
         info.set_length(data.seconds);
-        info.info_set("nsfplay_version","0.2.4");
+        info.info_set("nsfplay_version","0.3.0");
         info.info_set_int("nsf_play_ms",data.play_ms);info.info_set_int("nsf_loop_ms",data.loop_ms);info.info_set_int("nsf_fade_ms",data.fade_ms);
     }
     t_filestats get_file_stats(abort_callback& abort) { return file_->get_stats(abort); }

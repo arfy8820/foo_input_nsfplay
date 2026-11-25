@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <string_view>
 
 namespace nsfplay_component {
 namespace {
@@ -88,202 +89,572 @@ private:
     }
 };
 
-enum { Category=100,Search,Params,Value,Choices,PickColor,Help,Import,Export,Inspect,PresetName,PresetSave,PresetLoad,PresetDelete,ValueLabel,ChoiceLabel,CategoryLabel,SearchLabel,ParamsLabel,PresetLabel };
+enum { Search=101, Params, SearchLabel, ParamsLabel, ChannelLabel, ChannelSelect, Help,
+       Import, Export, Inspect, PresetLabel, PresetName, PresetSave, PresetLoad, PresetDelete,
+       FirstEditor=2000 };
+
+enum class Page { main, playback, audio, timing, channels, display, compatibility, diagnostics,
+                  apu, fds, mmc5, n163, sunsoft, vrc6, vrc7 };
+
+struct PageInfo {
+    const char* name;
+    const char* group;
+    const char* chips;
+};
+
+constexpr PageInfo page_info[] = {
+    {"NSFPlay", "", ""}, {"Playback", "Playback", ""}, {"Audio", "Audio", ""},
+    {"Timing", "Timing", ""}, {"Channels", "Channels", ""}, {"Display", "Display", ""},
+    {"Compatibility", "Compatibility", ""}, {"Diagnostics", "Diagnostics", ""},
+    {"APU", "", "APU1 APU2"}, {"FDS", "", "FDS"}, {"MMC5", "", "MMC5"}, {"N163", "", "N163"},
+    {"Sunsoft 5B", "", "5B"}, {"VRC6", "", "VRC6"}, {"VRC7", "", "VRC7"}
+};
+
+const PageInfo& info(Page page) { return page_info[static_cast<size_t>(page)]; }
+
+bool belongs(Page page, const Parameter& param) {
+    const auto& spec=info(page);
+    if(page==Page::main) return true;
+    if(*spec.group) return param.group==spec.group;
+    if(param.group!="Mixer" && !param.group.starts_with("Chip ")) return false;
+    const auto device=param.key.substr(0,param.key.find('_'));
+    const auto chips=std::string_view(spec.chips);
+    return page==Page::apu ? device=="APU1" || device=="APU2" : device==chips;
+}
+
+GUID page_guid(Page page) {
+    if(page==Page::main) return preferences_guid;
+    return {0x9abe8e74,0xc28e,0x432b,{0xa4,0x7d,0x70,0x9c,0x79,0xff,0x4b,static_cast<unsigned char>(page)}};
+}
+constexpr GUID chips_guid{0x9abe8e74,0xc28e,0x432b,{0xa4,0x7d,0x70,0x9c,0x79,0xff,0x4b,0xff}};
+
+std::string field_label(const Parameter& p) {
+    std::string label=p.label;
+    if(p.group=="Mixer") {
+        label=p.key.ends_with("_MUTE") ? "Mute device" : "Device gain";
+    }
+    if((p.group=="Mixer" || p.group.starts_with("Chip ")) && p.key.starts_with("APU"))
+        label=(p.key.starts_with("APU1_") ? "Pulse: " : "Triangle, noise and DPCM: ")+label;
+    return label;
+}
+
+struct PreferencesDraft {
+    Settings baseline=host_settings(), values=baseline;
+    struct Error { std::string text, reason; };
+    std::map<std::string,Error> invalid;
+    bool changed() const { return values!=baseline; }
+};
+
+// Hold the draft for the lifetime of the preferences dialog, including when the
+// host destroys a page while switching between tree items.
+constexpr UINT_PTR draft_subclass=0x4e534650;
+constexpr UINT dpi_changed_after_parent=0x02e3;
+LRESULT CALLBACK release_draft(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data) {
+    if(msg==WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd,release_draft,id);
+        delete reinterpret_cast<std::shared_ptr<PreferencesDraft>*>(data);
+    }
+    return DefSubclassProc(hwnd,msg,wp,lp);
+}
+std::shared_ptr<PreferencesDraft> preferences_draft(HWND parent) {
+    const auto root=GetAncestor(parent,GA_ROOT);
+    DWORD_PTR previous=0;
+    if(GetWindowSubclass(root,release_draft,draft_subclass,&previous))
+        return *reinterpret_cast<std::shared_ptr<PreferencesDraft>*>(previous);
+    auto draft=std::make_unique<std::shared_ptr<PreferencesDraft>>(std::make_shared<PreferencesDraft>());
+    if(!SetWindowSubclass(root,release_draft,draft_subclass,reinterpret_cast<DWORD_PTR>(draft.get())))
+        throw std::runtime_error("Cannot initialize NSFPlay preferences");
+    return *draft.release();
+}
+
 class Preferences : public preferences_page_instance, public NativeWindow {
 public:
-    explicit Preferences(preferences_page_callback::ptr callback):callback_(callback),draft_(host_settings()),baseline_(draft_) {}
-    // Controls synchronously send WM_COMMAND while their initial values are set.
-    // Only create the HWND after service_impl_t has installed its reference-count
-    // vtable and the factory holds an owning service_ptr.
-    void initialize_window(HWND parent) { create(parent,true,L"NSFPlay preferences"); }
+    Preferences(Page page,std::shared_ptr<PreferencesDraft> draft,preferences_page_callback::ptr cb)
+        : page_(page), draft_(std::move(draft)), callback_(std::move(cb)) {}
+    void initialize_window(HWND parent) {
+        create(parent,true,L"NSFPlay preferences");
+        SetWindowLongPtrW(window,GWL_STYLE,GetWindowLongPtrW(window,GWL_STYLE)|WS_VSCROLL);
+        SetWindowPos(window,nullptr,0,0,0,0,SWP_FRAMECHANGED|SWP_NOZORDER|SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    }
     HWND get_wnd() override { return window; }
     t_uint32 get_state() override {
         t_uint32 state=preferences_state::resettable|preferences_state::dark_mode_supported;
-        if(draft_!=baseline_&&invalid_.empty()) {
-            state|=preferences_state::changed;
-            for(const auto& p:parameters())if(!p.live&&p.key!="LAST_PRESET"&&p.key!="TITLE_FORMAT"&&draft_.at(p.key)!=baseline_.at(p.key))state|=preferences_state::needs_restart_playback;
-            if(draft_.at("NSFE_PLAYLIST")!=baseline_.at("NSFE_PLAYLIST"))state|=preferences_state::needs_rescan_library;
-        }
+        if(!draft_->changed() || !draft_->invalid.empty()) return state;
+        state|=preferences_state::changed;
+        for(const auto& p:parameters())
+            if(!p.live && p.key!="LAST_PRESET" && p.key!="TITLE_FORMAT" && modified(p))
+                state|=preferences_state::needs_restart_playback;
+        if(modified(parameter("NSFE_PLAYLIST"))) state|=preferences_state::needs_rescan_library;
         return state;
     }
     void apply() override {
-        if(!invalid_.empty())return;auto current=host_settings();for(const auto& p:parameters())if(draft_.at(p.key)!=baseline_.at(p.key))current[p.key]=draft_.at(p.key);
-        save_settings(current);baseline_=draft_=current;rebuild();callback_->on_state_changed();
+        if(!draft_->changed() || !draft_->invalid.empty()) return;
+        auto current=host_settings();
+        for(const auto& p:parameters()) if(modified(p)) current[p.key]=draft_->values.at(p.key);
+        save_settings(current);
+        draft_->baseline=draft_->values=std::move(current);
+        sync_fields();
+        notify();
     }
-    void reset() override { draft_=defaults();invalid_.clear();rebuild();callback_->on_state_changed(); }
+    void reset() override {
+        for(const auto& p:parameters()) if(belongs(page_,p)) {
+            draft_->values[p.key]=p.initial;
+            draft_->invalid.erase(p.key);
+        }
+        sync_fields();
+        notify();
+    }
+
 private:
+    struct Field {
+        const Parameter* param=nullptr;
+        HWND label=nullptr, edit=nullptr, color=nullptr;
+        std::vector<HWND> buttons;
+    };
+    Page page_;
+    std::shared_ptr<PreferencesDraft> draft_;
     preferences_page_callback::ptr callback_;
-    Settings draft_,baseline_;
+    std::vector<Field> fields_;
     std::vector<const Parameter*> matches_;
-    std::string selected_,invalid_;
-    bool updating_=false;
-    bool initialized_=false;
-    HWND category_=nullptr,search_=nullptr,params_=nullptr,value_=nullptr,choices_=nullptr,pick_=nullptr,help_=nullptr,preset_=nullptr;
-    std::filesystem::path preset_path() {
-        const auto name=text_of(preset_);
-        if(name.empty()||name.size()>128||name.find_first_of("<>:\"/\\|?*.")!=std::string::npos)throw std::runtime_error("Use a preset name without dots or path punctuation");
-        auto folder=std::filesystem::u8path(profile_folder())/L"presets";std::filesystem::create_directories(folder);return folder/(std::filesystem::u8path(name).wstring()+L".ini");
+    std::vector<std::pair<HWND,int>> positions_;
+    std::string selected_;
+    const Parameter* focused_=nullptr;
+    HWND search_=nullptr,params_=nullptr,channel_=nullptr,preset_=nullptr,help_=nullptr,editor_after_=nullptr;
+    int next_editor_=FirstEditor;
+    int scroll_=0, scroll_limit_=0, view_height_=0, wheel_=0;
+    bool updating_=false, initialized_=false;
+
+    bool modified(const Parameter& p) const {return draft_->values.at(p.key)!=draft_->baseline.at(p.key);}
+    bool main_page() const {return page_==Page::main;}
+    void notify() {
+        preferences_page_instance::ptr keep(this);
+        callback_->on_state_changed();
     }
-    void presets() {
-        const auto current=text_of(preset_);SendMessageW(preset_,CB_RESETCONTENT,0,0);
-        const auto folder=std::filesystem::u8path(profile_folder())/L"presets";std::filesystem::create_directories(folder);
-        for(const auto& entry:std::filesystem::directory_iterator(folder))if(entry.path().extension()==L".ini")SendMessageW(preset_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(entry.path().stem().c_str()));
-        text_to(preset_,current.empty()?draft_.at("LAST_PRESET"):current);
+    static bool is_switch(const Parameter& p) {
+        return p.kind==ParamKind::boolean || (p.kind==ParamKind::choice && p.choices.size()==2);
+    }
+    static LRESULT CALLBACK follow_focus(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data) {
+        if(msg==WM_SETFOCUS) reinterpret_cast<Preferences*>(data)->reveal(hwnd);
+        if(msg==WM_NCDESTROY) RemoveWindowSubclass(hwnd,follow_focus,id);
+        return DefSubclassProc(hwnd,msg,wp,lp);
+    }
+    HWND make(const wchar_t* cls,const std::string& label,int id,DWORD style=0,DWORD ex=0) {
+        const auto wnd=control(cls,wide(label).c_str(),id,style,ex);
+        if(!wnd) throw std::runtime_error("Cannot create NSFPlay preference control");
+        if(id>=FirstEditor) {
+            SetWindowPos(wnd,editor_after_,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+            editor_after_=wnd;
+            if(initialized_) dark_.AddCtrlAuto(wnd);
+        }
+        if((style&WS_TABSTOP) || id>=FirstEditor)
+            SetWindowSubclass(wnd,follow_focus,1,reinterpret_cast<DWORD_PTR>(this));
+        return wnd;
+    }
+    HWND item(int id) const {return GetDlgItem(window,id);}
+    void reveal(HWND wnd) {
+        if(!initialized_ || updating_) return;
+        const auto pos=std::find_if(positions_.begin(),positions_.end(),[=](const auto& p){return p.first==wnd;});
+        if(pos!=positions_.end()) {
+            int top=pos->second;
+            const auto field=std::find_if(fields_.begin(),fields_.end(),[=](const Field& f){
+                return f.edit==wnd || f.color==wnd || std::find(f.buttons.begin(),f.buttons.end(),wnd)!=f.buttons.end();
+            });
+            if(field!=fields_.end()) {
+                focused_=field->param;
+                update_help();
+                if(field->edit==wnd) top-=19;
+            }
+            if(top<scroll_) set_scroll(top-4);
+            else if(pos->second+26>scroll_+view_height_) set_scroll(pos->second+30-view_height_);
+        }
+    }
+    void set_scroll(int position) {
+        const int next=std::clamp(position,0,scroll_limit_);
+        if(next!=scroll_) {scroll_=next; layout();}
+    }
+    void place(HWND wnd,int x,int y,int w,int h) {
+        if(!wnd) return;
+        positions_.emplace_back(wnd,y);
+        move(wnd,x,y-scroll_,w,h);
+    }
+    void clear_fields() {
+        focused_=nullptr;
+        for(auto& f:fields_) {
+            for(const auto wnd:f.buttons) DestroyWindow(wnd);
+            for(const auto wnd:{f.label,f.edit,f.color}) if(wnd) DestroyWindow(wnd);
+        }
+        fields_.clear();
+        next_editor_=FirstEditor;
+        editor_after_=main_page()?params_:channel_?channel_:HWND_TOP;
+    }
+    void add_field(const Parameter& p) {
+        auto& field=fields_.emplace_back();
+        field.param=&p;
+        auto label=field_label(p);
+        if(is_switch(p)) {
+            if(p.kind==ParamKind::choice) label=p.choices.back().second+" ("+label+")";
+            field.buttons.push_back(make(L"BUTTON",label,next_editor_++,WS_GROUP|WS_TABSTOP|BS_AUTOCHECKBOX));
+        } else if(p.kind==ParamKind::choice) {
+            field.label=make(L"BUTTON",label,next_editor_++,WS_GROUP|BS_GROUPBOX);
+            for(size_t i=0;i<p.choices.size();++i)
+                field.buttons.push_back(make(L"BUTTON",p.choices[i].second,next_editor_++,
+                    BS_AUTORADIOBUTTON|(i==0?WS_GROUP|WS_TABSTOP:0)));
+        } else {
+            field.label=make(L"STATIC",label,next_editor_++,WS_GROUP|SS_NOPREFIX);
+            field.edit=make(L"EDIT","",next_editor_++,WS_TABSTOP|ES_AUTOHSCROLL,WS_EX_CLIENTEDGE);
+            SendMessageW(field.edit,EM_SETLIMITTEXT,1024,0);
+            if(p.kind==ParamKind::fixed) SendMessageW(field.edit,EM_SETREADONLY,TRUE,0);
+            if(p.kind==ParamKind::color)
+                field.color=make(L"BUTTON","Color...",next_editor_++,WS_TABSTOP);
+        }
+    }
+    void sync_fields() {
+        if(!window) return;
+        updating_=true;
+        for(const auto& f:fields_) {
+            const auto& p=*f.param;
+            const auto& value=draft_->values.at(p.key);
+            if(f.edit) {
+                const auto bad=draft_->invalid.find(p.key);
+                const auto& text=bad==draft_->invalid.end()?value:bad->second.text;
+                if(text!=text_of(f.edit)) text_to(f.edit,text);
+            } else if(is_switch(p)) {
+                const auto& on=p.kind==ParamKind::boolean?std::string("1"):p.choices.back().first;
+                SendMessageW(f.buttons.front(),BM_SETCHECK,value==on?BST_CHECKED:BST_UNCHECKED,0);
+            } else {
+                for(size_t i=0;i<f.buttons.size();++i) {
+                    const bool checked=value==p.choices[i].first;
+                    const auto button=f.buttons[i];
+                    SendMessageW(button,BM_SETCHECK,checked?BST_CHECKED:BST_UNCHECKED,0);
+                    const auto style=GetWindowLongPtrW(button,GWL_STYLE);
+                    SetWindowLongPtrW(button,GWL_STYLE,checked?style|WS_TABSTOP:style&~WS_TABSTOP);
+                }
+            }
+        }
+        updating_=false;
+        update_help();
+    }
+    void update_help() {
+        if(!draft_->invalid.empty()) {
+            const auto& [key,error]=*draft_->invalid.begin();
+            text_to(help_,"Invalid "+field_label(parameter(key))+". "+error.reason);
+        } else if(main_page() && matches_.empty()) {
+            text_to(help_,"No parameters match the search.");
+        } else if(main_page() && !fields_.empty()) {
+            const auto& p=*fields_.front().param;
+            text_to(help_,p.help+(p.live?" Changes can be applied to current playback.":" Takes effect when a track is reopened."));
+        } else text_to(help_,focused_?focused_->help:"");
     }
     void layout() {
-        RECT rc;GetClientRect(window,&rc);const int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_);
-        const int category_width=std::min(200,std::max(90,(w-30)/2));
-        const int search_x=category_width+20;
-        move(GetDlgItem(window,CategoryLabel),10,10,category_width,18);
-        move(category_,10,30,category_width,240);
-        move(GetDlgItem(window,SearchLabel),search_x,10,w-search_x-10,18);
-        move(search_,search_x,30,w-search_x-10,24);
-        move(GetDlgItem(window,ParamsLabel),10,64,w-20,18);
-        move(params_,10,84,w-20,280);
-        for(int id:{ValueLabel,ChoiceLabel})move(GetDlgItem(window,id),10,118,w-20,18);
-        move(value_,10,138,w-112,24);move(choices_,10,138,w-112,240);move(pick_,w-94,138,84,24);
-        const int actions_y=std::max(230,h-90);
-        move(help_,10,170,w-20,actions_y-178);
-        move(GetDlgItem(window,Import),10,actions_y,90,24);move(GetDlgItem(window,Export),106,actions_y,90,24);move(GetDlgItem(window,Inspect),202,actions_y,w-212,24);
-        move(GetDlgItem(window,PresetLabel),10,actions_y+30,w-20,18);
-        move(preset_,10,actions_y+48,std::max(90,w-240),240);move(GetDlgItem(window,PresetSave),w-222,actions_y+48,66,24);move(GetDlgItem(window,PresetLoad),w-150,actions_y+48,66,24);move(GetDlgItem(window,PresetDelete),w-78,actions_y+48,68,24);
-    }
-    void rebuild() {
-        updating_=true;
-        SendMessageW(params_,CB_RESETCONTENT,0,0);
-        matches_.clear();
-        const auto group=text_of(category_),query=lower(text_of(search_));
-        int select=0;
-        for(const auto& p:parameters()) {
-            if(group!="All parameters"&&p.group!=group)continue;
-            if(!query.empty()&&lower(p.key+" "+p.label+" "+p.help).find(query)==std::string::npos)continue;
-            const auto label=wide(group=="All parameters"?p.group+" / "+p.label:p.label);
-            const auto item=SendMessageW(params_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));
-            if(item<0)continue;
-            matches_.push_back(&p);
-            if(p.key==selected_)select=static_cast<int>(item);
+        RECT rc{};
+        GetClientRect(window,&rc);
+        const int w=MulDiv(rc.right,96,dpi_), h=MulDiv(rc.bottom,96,dpi_);
+        positions_.clear();
+        int y=10;
+        if(main_page()) {
+            place(item(SearchLabel),10,y,w-20,19);
+            place(search_,10,y+20,w-20,24);
+            place(item(ParamsLabel),10,y+53,w-20,19);
+            place(params_,10,y+73,w-20,260);
+            y+=110;
+        } else if(page_==Page::channels) {
+            place(item(ChannelLabel),10,y,w-20,19);
+            place(channel_,10,y+20,w-20,260);
+            y+=54;
         }
-        EnableWindow(params_,!matches_.empty());
-        SendMessageW(params_,CB_SETCURSEL,select,0);
-        updating_=false;
-        select_parameter();
-    }
-    void select_parameter() {
-        const auto index=SendMessageW(params_,CB_GETCURSEL,0,0);
-        const auto p=index==CB_ERR?nullptr:matches_[index];
-        const bool combo=p&&(p->kind==ParamKind::choice||p->kind==ParamKind::boolean);
-        updating_=true;
-        invalid_.clear();
-        selected_=p?p->key:"";
-        ShowWindow(GetDlgItem(window,ValueLabel),p&&!combo?SW_SHOW:SW_HIDE);
-        ShowWindow(value_,p&&!combo?SW_SHOW:SW_HIDE);
-        ShowWindow(GetDlgItem(window,ChoiceLabel),combo?SW_SHOW:SW_HIDE);
-        ShowWindow(choices_,combo?SW_SHOW:SW_HIDE);
-        ShowWindow(pick_,p&&p->kind==ParamKind::color?SW_SHOW:SW_HIDE);
-        SendMessageW(choices_,CB_RESETCONTENT,0,0);
-        if(p) {
-            text_to(GetDlgItem(window,combo?ChoiceLabel:ValueLabel),p->label);
-            show_help(*p);
-            const auto& value=draft_.at(selected_);
-            if(combo) {
-                auto entries=p->choices;
-                if(p->kind==ParamKind::boolean)entries={{"0","Disabled"},{"1","Enabled"}};
-                for(size_t i=0;i<entries.size();++i) {
-                    const auto label=wide(entries[i].second);
-                    SendMessageW(choices_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));
-                    if(entries[i].first==value)SendMessageW(choices_,CB_SETCURSEL,i,0);
-                }
+        for(const auto& field:fields_) {
+            if(field.edit) {
+                place(field.label,10,y,w-20,19);
+                place(field.edit,10,y+20,field.color?w-112:w-20,24);
+                place(field.color,w-94,y+20,84,24);
+                y+=51;
+            } else if(is_switch(*field.param)) {
+                place(field.buttons.front(),10,y,w-20,24);
+                y+=29;
             } else {
-                SendMessageW(value_,EM_SETREADONLY,p->kind==ParamKind::fixed,0);
-                text_to(value_,value);
+                const int columns=w>=490?3:w>=335?2:1;
+                const int column_width=(w-42)/columns;
+                const int rows=(static_cast<int>(field.buttons.size())+columns-1)/columns;
+                place(field.label,10,y,w-20,26+rows*24);
+                for(size_t i=0;i<field.buttons.size();++i)
+                    place(field.buttons[i],22+(int(i)%columns)*column_width,y+20+int(i)/columns*24,column_width-4,22);
+                y+=34+rows*24;
+            }
+        }
+        place(help_,10,y,w-20,54);
+        y+=main_page()?60:44;
+        if(main_page()) {
+            place(item(Import),10,y,90,24); place(item(Export),106,y,90,24);
+            place(item(Inspect),202,y,w-212,24);
+            place(item(PresetLabel),10,y+34,w-20,19);
+            place(preset_,10,y+54,std::max(80,w-240),260);
+            place(item(PresetSave),w-222,y+54,66,24);
+            place(item(PresetLoad),w-150,y+54,66,24);
+            place(item(PresetDelete),w-78,y+54,68,24);
+            y+=87;
+        }
+        view_height_=std::max(1,h);
+        scroll_limit_=std::max(0,y-view_height_);
+        SCROLLINFO bar{sizeof(bar),SIF_RANGE|SIF_PAGE|SIF_POS|SIF_DISABLENOSCROLL,0,std::max(0,y-1),static_cast<UINT>(view_height_),scroll_,0};
+        SetScrollInfo(window,SB_VERT,&bar,TRUE);
+        if(scroll_>scroll_limit_) {scroll_=scroll_limit_;layout();}
+    }
+    void rebuild_fields() {
+        updating_=true;
+        clear_fields();
+        if(main_page()) {
+            const auto index=SendMessageW(params_,CB_GETCURSEL,0,0);
+            if(index!=CB_ERR) {
+                selected_=matches_[index]->key;
+                add_field(*matches_[index]);
             }
         } else {
-            text_to(help_,"No parameters match the search.");
-        }
-        updating_=false;
-    }
-    void show_help(const Parameter& p) {
-        text_to(help_,p.key+"\r\n"+p.help+(p.live?" Changes can be applied to current playback.":" Takes effect when a track is reopened."));
-    }
-    void edit() {
-        if(updating_||selected_.empty())return;const auto& p=parameter(selected_);std::string value=text_of(value_);
-        if(p.kind==ParamKind::boolean||p.kind==ParamKind::choice) {
-            const auto index=SendMessageW(choices_,CB_GETCURSEL,0,0);
-            if(index==CB_ERR)return;
-            value=p.kind==ParamKind::boolean?(index==1?"1":"0"):p.choices[index].first;
-        }
-        try { set_value(draft_,selected_,value);invalid_.clear();show_help(p); }
-        catch(const std::exception& e) { invalid_=e.what();text_to(help_,"Invalid value: "+invalid_); }
-        callback_->on_state_changed();
-    }
-    void command(int id) {
-        if(id==IDCANCEL) {if(!(GetWindowLongPtrW(window,GWL_STYLE)&WS_CHILD))DestroyWindow(window);return;}
-        if(id==Inspect) {show_inspector();return;}
-        if(id==PickColor) {
-            if(selected_.empty())return;static COLORREF custom[16]={};CHOOSECOLORW c={sizeof(c)};c.hwndOwner=window;c.rgbResult=color(draft_.at(selected_));c.lpCustColors=custom;c.Flags=CC_FULLOPEN|CC_RGBINIT;
-            if(ChooseColorW(&c))text_to(value_,hexcolor(c.rgbResult));return;
-        }
-        if(!invalid_.empty())throw std::runtime_error("Correct the invalid value first: "+invalid_);
-        if(id==Import) {
-            const auto path=file_dialog(window,false,L"NSFPlay settings (*.ini)\0*.ini\0All files\0*.*\0",L"ini");
-            if(!path.empty()) {
-                auto imported=import_settings(read_text(path),draft_);draft_=std::move(imported.values);
-                for(const auto& [name,preset]:imported.presets) {text_to(preset_,name);write_text(preset_path(),serialize(preset));}presets();rebuild();
-                std::string summary="Imported settings and "+std::to_string(imported.presets.size())+" presets. Apply to save settings.";
-                for(const auto& note:imported.notices)summary+="\r\n"+note;
-                text_to(help_,summary);
+            const auto index=channel_?SendMessageW(channel_,CB_GETCURSEL,0,0):0;
+            for(const auto& p:parameters()) {
+                if(!belongs(page_,p)) continue;
+                if(p.key.starts_with("CHANNEL_") && page_==Page::channels &&
+                    p.key!=channel_key(static_cast<unsigned>(index),"PAN") &&
+                    p.key!=channel_key(static_cast<unsigned>(index),"VOL") &&
+                    p.key!=channel_key(static_cast<unsigned>(index),"COL")) continue;
+                add_field(p);
             }
         }
-        if(id==Export) { const auto path=file_dialog(window,true,L"NSFPlay settings (*.ini)\0*.ini\0",L"ini",L"nsfplay.ini");if(!path.empty())write_text(path,serialize(draft_)); }
-        if(id==PresetSave) { const auto path=preset_path();draft_["LAST_PRESET"]=text_of(preset_);write_text(path,serialize(draft_));presets(); }
-        if(id==PresetLoad) { const auto name=text_of(preset_);draft_=deserialize(read_text(preset_path()));draft_["LAST_PRESET"]=name;rebuild(); }
-        if(id==PresetDelete) { const auto path=preset_path();if(MessageBoxW(window,L"Delete this preset?",L"NSFPlay",MB_YESNO|MB_ICONQUESTION)==IDYES) {std::filesystem::remove(path);presets();} }
-        callback_->on_state_changed();
+        sync_fields();
+        layout();
+    }
+    void rebuild_search() {
+        updating_=true;
+        matches_.clear();
+        SendMessageW(params_,CB_RESETCONTENT,0,0);
+        const auto query=lower(text_of(search_));
+        int selection=0;
+        for(const auto& p:parameters()) {
+            const auto label=field_label(p);
+            auto group=p.group;
+            for(size_t i=static_cast<size_t>(Page::apu);i<std::size(page_info);++i)
+                if(belongs(static_cast<Page>(i),p)) {group=page_info[i].name;break;}
+            if(!query.empty() && lower(group+" "+p.group+" "+p.key+" "+label+" "+p.help).find(query)==std::string::npos) continue;
+            const auto display=wide(group+" / "+label);
+            const auto n=SendMessageW(params_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(display.c_str()));
+            if(n==CB_ERR || n==CB_ERRSPACE) continue;
+            if(p.key==selected_) selection=static_cast<int>(n);
+            matches_.push_back(&p);
+        }
+        EnableWindow(params_,!matches_.empty());
+        SendMessageW(params_,CB_SETCURSEL,selection,0);
+        rebuild_fields();
+    }
+    void edit(const Field& field,std::string value) {
+        const auto& p=*field.param;
+        try {
+            set_value(draft_->values,p.key,value);
+            draft_->invalid.erase(p.key);
+        } catch(const std::exception& e) {
+            draft_->invalid[p.key]={std::move(value),e.what()};
+        }
+        update_help();
+        notify();
+    }
+    void edit_command(HWND source,int code) {
+        for(const auto& field:fields_) {
+            const auto& p=*field.param;
+            if(source==field.edit && code==EN_CHANGE) {
+                if(p.kind!=ParamKind::fixed) edit(field,text_of(source));
+                return;
+            }
+            if(code!=BN_CLICKED) continue;
+            if(source==field.color) {
+                static COLORREF custom[16]={};
+                CHOOSECOLORW c={sizeof(c)};
+                c.hwndOwner=window;
+                c.rgbResult=color(draft_->values.at(p.key));
+                c.lpCustColors=custom;
+                c.Flags=CC_FULLOPEN|CC_RGBINIT;
+                if(ChooseColorW(&c) && window) text_to(field.edit,hexcolor(c.rgbResult));
+                return;
+            }
+            const auto button=std::find(field.buttons.begin(),field.buttons.end(),source);
+            if(button==field.buttons.end()) continue;
+            if(is_switch(p)) {
+                const bool on=SendMessageW(source,BM_GETCHECK,0,0)==BST_CHECKED;
+                edit(field,p.kind==ParamKind::boolean?(on?"1":"0"):p.choices[on?1:0].first);
+            } else {
+                for(auto wnd:field.buttons) {
+                    const auto style=GetWindowLongPtrW(wnd,GWL_STYLE);
+                    SetWindowLongPtrW(wnd,GWL_STYLE,wnd==source?style|WS_TABSTOP:style&~WS_TABSTOP);
+                }
+                edit(field,p.choices[button-field.buttons.begin()].first);
+            }
+            return;
+        }
+    }
+    std::filesystem::path preset_path() {
+        const auto name=text_of(preset_);
+        if(name.empty()||name.size()>128||name.find_first_of("<>:\"/\\|?*.")!=std::string::npos)
+            throw std::runtime_error("Use a preset name without dots or path punctuation");
+        auto folder=std::filesystem::u8path(profile_folder())/L"presets";
+        std::filesystem::create_directories(folder);
+        return folder/(std::filesystem::u8path(name).wstring()+L".ini");
+    }
+    void presets() {
+        const auto current=text_of(preset_);
+        SendMessageW(preset_,CB_RESETCONTENT,0,0);
+        const auto folder=std::filesystem::u8path(profile_folder())/L"presets";
+        std::filesystem::create_directories(folder);
+        for(const auto& entry:std::filesystem::directory_iterator(folder))
+            if(entry.path().extension()==L".ini")
+                SendMessageW(preset_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(entry.path().stem().c_str()));
+        text_to(preset_,current.empty()?draft_->values.at("LAST_PRESET"):current);
+    }
+    void action(int id) {
+        if(id==Inspect) {show_inspector();return;}
+        if(id!=Import&&id!=Export&&id!=PresetSave&&id!=PresetLoad&&id!=PresetDelete) return;
+        if(!draft_->invalid.empty()) throw std::runtime_error("Correct invalid values before using settings files or presets");
+        if(id==Import) {
+            const auto path=file_dialog(window,false,L"NSFPlay settings (*.ini)\0*.ini\0All files\0*.*\0",L"ini");
+            if(!window||path.empty())return;
+            auto imported=import_settings(read_text(path),draft_->values);
+            draft_->values=std::move(imported.values);
+            for(const auto& [name,preset]:imported.presets) {text_to(preset_,name);write_text(preset_path(),serialize(preset));}
+            presets();
+            sync_fields();
+            std::string summary="Imported settings and "+std::to_string(imported.presets.size())+" presets. Apply to save settings.";
+            for(const auto& note:imported.notices)summary+="\r\n"+note;
+            text_to(help_,summary);
+        } else if(id==Export) {
+            const auto path=file_dialog(window,true,L"NSFPlay settings (*.ini)\0*.ini\0",L"ini",L"nsfplay.ini");
+            if(!path.empty())write_text(path,serialize(draft_->values));
+        } else if(id==PresetSave) {
+            const auto path=preset_path();
+            draft_->values["LAST_PRESET"]=text_of(preset_);
+            write_text(path,serialize(draft_->values));
+            presets();
+        } else if(id==PresetLoad) {
+            const auto name=text_of(preset_);
+            draft_->values=deserialize(read_text(preset_path()));
+            draft_->values["LAST_PRESET"]=name;
+            sync_fields();
+        } else {
+            const auto path=preset_path();
+            if(MessageBoxW(window,L"Delete this preset?",L"NSFPlay",MB_YESNO|MB_ICONQUESTION)==IDYES) {
+                std::filesystem::remove(path);
+                if(window) presets();
+            }
+        }
+        notify();
+    }
+    void create_controls() {
+        if(main_page()) {
+            make(L"STATIC","Search parameters",SearchLabel,WS_GROUP);
+            search_=make(L"EDIT","",Search,WS_TABSTOP|ES_AUTOHSCROLL,WS_EX_CLIENTEDGE);
+            make(L"STATIC","Parameter",ParamsLabel,WS_GROUP);
+            params_=make(WC_COMBOBOXW,"",Params,CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL);
+        } else if(page_==Page::channels) {
+            make(L"STATIC","Sound channel",ChannelLabel,WS_GROUP);
+            channel_=make(WC_COMBOBOXW,"",ChannelSelect,CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL);
+            for(const auto* name:channel_names)
+                SendMessageW(channel_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(wide(name).c_str()));
+            SendMessageW(channel_,CB_SETCURSEL,0,0);
+        }
+        help_=make(L"STATIC","",Help,WS_GROUP|SS_NOPREFIX);
+        if(main_page()) rebuild_search();
+        else rebuild_fields();
+        if(main_page()) {
+            make(L"BUTTON","&Import...",Import,WS_GROUP|WS_TABSTOP);
+            make(L"BUTTON","&Export...",Export,WS_TABSTOP);
+            make(L"BUTTON","Playback &inspector",Inspect,WS_TABSTOP);
+            make(L"STATIC","Preset name",PresetLabel,WS_GROUP);
+            preset_=make(WC_COMBOBOXW,"",PresetName,CBS_DROPDOWN|WS_TABSTOP|WS_VSCROLL);
+            make(L"BUTTON","&Save",PresetSave,WS_TABSTOP);
+            make(L"BUTTON","&Load",PresetLoad,WS_TABSTOP);
+            make(L"BUTTON","&Delete",PresetDelete,WS_TABSTOP);
+            presets();
+        }
+        theme();
+        initialized_=true;
+        layout();
     }
     LRESULT dispatch(UINT msg,WPARAM wp,LPARAM lp) override {
-        if(msg==WM_CREATE) {
-            control(L"STATIC",L"Category",CategoryLabel);
-            category_=control(WC_COMBOBOXW,L"",Category,CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL);
-            control(L"STATIC",L"Search parameters",SearchLabel);
-            search_=control(L"EDIT",L"",Search,WS_TABSTOP|ES_AUTOHSCROLL,WS_EX_CLIENTEDGE);
-            control(L"STATIC",L"Parameter",ParamsLabel);
-            params_=control(WC_COMBOBOXW,L"",Params,CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL);
-            control(L"STATIC",L"",ValueLabel,SS_NOPREFIX);
-            value_=control(L"EDIT",L"",Value,WS_TABSTOP|ES_AUTOHSCROLL,WS_EX_CLIENTEDGE);SendMessageW(value_,EM_SETLIMITTEXT,1024,0);
-            control(L"STATIC",L"",ChoiceLabel,SS_NOPREFIX);
-            choices_=control(WC_COMBOBOXW,L"",Choices,CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL);pick_=control(L"BUTTON",L"&Color...",PickColor,WS_TABSTOP);help_=control(L"STATIC",L"",Help,SS_NOPREFIX);
-            control(L"BUTTON",L"&Import...",Import,WS_TABSTOP);control(L"BUTTON",L"&Export...",Export,WS_TABSTOP);control(L"BUTTON",L"Playback &inspector",Inspect,WS_TABSTOP);
-            control(L"STATIC",L"Preset name",PresetLabel);
-            preset_=control(WC_COMBOBOXW,L"",PresetName,CBS_DROPDOWN|WS_TABSTOP|WS_VSCROLL);control(L"BUTTON",L"&Save",PresetSave,WS_TABSTOP);control(L"BUTTON",L"&Load",PresetLoad,WS_TABSTOP);control(L"BUTTON",L"&Delete",PresetDelete,WS_TABSTOP);
-            SendMessageW(category_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"All parameters"));std::vector<std::string> groups;for(const auto& p:parameters())if(std::find(groups.begin(),groups.end(),p.group)==groups.end()) {groups.push_back(p.group);SendMessageW(category_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(wide(p.group).c_str()));}
-            SendMessageW(category_,CB_SETCURSEL,0,0);presets();rebuild();theme();layout();initialized_=true;return 0;
-        }
+        if(msg==WM_CREATE) {create_controls();return 0;}
+        if(msg==WM_DESTROY) {initialized_=false;return 0;}
         if(msg==WM_SIZE) {if(initialized_)layout();return 0;}
-        if(msg==WM_COMMAND) {
-            if(!initialized_||updating_)return 0;
-            // A temporary service reference keeps this object alive across native modal dialogs.
+        if(msg==WM_SHOWWINDOW && wp && initialized_) sync_fields();
+        if(msg==WM_DPICHANGED || msg==dpi_changed_after_parent) {
+            const auto result=NativeWindow::dispatch(msg==WM_DPICHANGED?msg:WM_DPICHANGED,
+                msg==WM_DPICHANGED?wp:MAKEWPARAM(0,window_dpi(window)),lp);
+            if(initialized_) layout();
+            return result;
+        }
+        if(msg==WM_VSCROLL && !lp && initialized_) {
+            int next=scroll_;
+            switch(LOWORD(wp)) {
+            case SB_LINEUP: next-=24;break;
+            case SB_LINEDOWN: next+=24;break;
+            case SB_PAGEUP: next-=view_height_;break;
+            case SB_PAGEDOWN: next+=view_height_;break;
+            case SB_TOP: next=0;break;
+            case SB_BOTTOM: next=scroll_limit_;break;
+            case SB_THUMBPOSITION:
+            case SB_THUMBTRACK: {
+                SCROLLINFO bar{sizeof(bar),SIF_TRACKPOS};
+                if(GetScrollInfo(window,SB_VERT,&bar))next=bar.nTrackPos;
+                break;
+            }
+            }
+            set_scroll(next);
+            return 0;
+        }
+        if(msg==WM_MOUSEWHEEL && initialized_) {
+            wheel_+=GET_WHEEL_DELTA_WPARAM(wp);
+            set_scroll(scroll_-48*(wheel_/WHEEL_DELTA));
+            wheel_%=WHEEL_DELTA;
+            return 0;
+        }
+        if(msg==WM_COMMAND && initialized_ && !updating_) {
             preferences_page_instance::ptr keep(this);
-            const int id=LOWORD(wp),event=HIWORD(wp);
-            if(id==Category&&event==CBN_SELCHANGE || id==Search&&event==EN_CHANGE) {invalid_.clear();rebuild();callback_->on_state_changed();}
-            else if(id==Params&&event==CBN_SELCHANGE) {const bool was_invalid=!invalid_.empty();select_parameter();if(was_invalid)callback_->on_state_changed();}
-            else if(id==Value&&event==EN_CHANGE || id==Choices&&event==CBN_SELCHANGE)edit();
-            else if(event==BN_CLICKED)command(id);return 0;
+            const int id=LOWORD(wp), code=HIWORD(wp);
+            if(id==Search && code==EN_CHANGE) rebuild_search();
+            else if((id==Params || id==ChannelSelect) && code==CBN_SELCHANGE) rebuild_fields();
+            else if(id>=FirstEditor) edit_command(reinterpret_cast<HWND>(lp),code);
+            else if(code==BN_CLICKED) action(id);
+            return 0;
         }
         return NativeWindow::dispatch(msg,wp,lp);
     }
 };
+
+template<Page page=Page::main>
 class PreferencesPage : public preferences_page_v3 {
 public:
-    const char* get_name() override {return "NSFPlay";}
-    GUID get_guid() override {return preferences_guid;}
-    GUID get_parent_guid() override {return guid_input;}
+    const char* get_name() override {return info(page).name;}
+    GUID get_guid() override {return page_guid(page);}
+    GUID get_parent_guid() override {
+        if constexpr(page==Page::main)return guid_input;
+        if constexpr(page>=Page::apu)return chips_guid;
+        return preferences_guid;
+    }
     preferences_page_instance::ptr instantiate(HWND parent,preferences_page_callback::ptr cb) override {
-        auto instance=fb2k::service_new<Preferences>(cb);
+        auto instance=fb2k::service_new<Preferences>(page,preferences_draft(parent),cb);
         instance->initialize_window(parent);
         return instance;
     }
 };
-static preferences_page_factory_t<PreferencesPage> preferences_factory;
+static preferences_branch_factory chips_branch(chips_guid,preferences_guid,"Chips");
+static preferences_page_factory_t<PreferencesPage<>> preferences_factory;
+static preferences_page_factory_t<PreferencesPage<Page::playback>> playback_factory;
+static preferences_page_factory_t<PreferencesPage<Page::audio>> audio_factory;
+static preferences_page_factory_t<PreferencesPage<Page::timing>> timing_factory;
+static preferences_page_factory_t<PreferencesPage<Page::channels>> channels_factory;
+static preferences_page_factory_t<PreferencesPage<Page::display>> display_factory;
+static preferences_page_factory_t<PreferencesPage<Page::compatibility>> compatibility_factory;
+static preferences_page_factory_t<PreferencesPage<Page::diagnostics>> diagnostics_factory;
+static preferences_page_factory_t<PreferencesPage<Page::apu>> apu_factory;
+static preferences_page_factory_t<PreferencesPage<Page::fds>> fds_factory;
+static preferences_page_factory_t<PreferencesPage<Page::mmc5>> mmc5_factory;
+static preferences_page_factory_t<PreferencesPage<Page::n163>> n163_factory;
+static preferences_page_factory_t<PreferencesPage<Page::sunsoft>> sunsoft_factory;
+static preferences_page_factory_t<PreferencesPage<Page::vrc6>> vrc6_factory;
+static preferences_page_factory_t<PreferencesPage<Page::vrc7>> vrc7_factory;
 
 enum { Status=1000,Previous,Pause,Next,SettingsButton,Tab,MixerItem,AllOn,AllOff,Invert,Solo,ResetMix,MonoPan,SpreadPan,RandomPan,ChannelColor,SaveDefaults,Volume,Pan,Master,VolumeLabel,PanLabel,MasterLabel,Wave,Keyboard,Details,MemoryAddress,MemoryValue,MemoryGo,MemoryWrite,MemorySave,ExportInfo,ExportPlaylist,MixerItemLabel,MuteItem,Activity,ActivityLabel,MixerValues };
 class Inspector;

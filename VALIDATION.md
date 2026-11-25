@@ -1,4 +1,12 @@
-# 0.2.4 patched engine and unified package
+# NSFPlay 0.3.0 preferences
+
+The x86 and x64 Release builds passed engine, native-window and isolated foobar2000 host tests with MSVC v145.
+
+- The native preference tests verify that all 177 settings have a page and are reachable from the main search. They check FDS and APU controls, checkbox and radio behavior, accessible names, tab order and focus-driven scrolling.
+- The isolated players opened the real Preferences tree, selected radio options with the arrow keys, and used one Apply to save changes made on separate pages.
+- The inspector tests still cover all 32 channel and eight device selections, live mixer edits, channel activity and tab order. Live NVDA testing is pending.
+
+## 0.2.4 patched engine and unified package
 
 Built both architectures on 25 November 2026 with MSVC v145 and foobar2000 SDK 2026-10-01. The engine includes all five supplied patches on upstream `6af5406` and a follow-up to bound title and playlist formatting and guard OPLL warm-up allocation. Replaying the six patch files in a clean checkout reproduced the same engine tree.
 

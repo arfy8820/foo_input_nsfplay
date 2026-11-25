@@ -1,10 +1,10 @@
-# NSFPlay 0.2.4
+# NSFPlay 0.3.0
 
 0.2.1 fixes the preferences-opening pure virtual call in 0.2.0. The page and docked inspector create their windows after their reference-counted service objects are fully constructed. Preferences initialization notifications cannot be mistaken for user edits.
 
 ## Install and open
 
-The unified installer, `foo_input_nsfplay-unified.fb2k-component`, works with 32-bit and 64-bit foobar2000. In foobar2000, select **Preferences > Components > Install**, choose the package, apply and restart. Local builds also produce individual installers under `dist/`. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
+The unified installer, `foo_input_nsfplay-unified.fb2k-component`, works with 32-bit and 64-bit foobar2000. In foobar2000, select **Preferences > Components > Install**, choose the package, apply and restart. If you installed the foo_input_nsfplug preview, remove that component before installing this build. Both use the same configuration and decoder identity. Local builds also produce individual installers under `dist/`. Resolve competing NSF decoders in Preferences > Playback > Decoding if necessary.
 
 Saved settings are under **Preferences > Playback > Decoding > NSFPlay**. The live interface is under **View > NSFPlay > Playback inspector**, or can be added as **NSFPlay inspector** in Default UI layout editing mode. Recent hosts also expose its automatic Playback Information command.
 
@@ -12,9 +12,11 @@ The x64 and Win32 builds use the same decoder, settings and inspector with fooba
 
 ## Preferences and presets
 
-Choose a **Category**, optionally enter a search, and Tab to **Parameter**. Use the arrow keys to select a setting, then Tab to its editor. Alt+Down opens the full dropdown. For **Chip FDS**, the choices are **Low-pass cutoff (Hz)**, **Reset on $4085**, and **Write protect**. Boolean and enumerated settings have named values, and colors have a color picker. The help text explains invalid values. **Apply** saves your edits. **Reset** previews upstream defaults until you apply them.
+Expand **NSFPlay** in the preferences tree and choose the page you want. **Chips** has one page per chip. The **APU** page includes pulse, triangle, noise and DPCM settings. **FDS** includes low-pass cutoff, reset on $4085, write protect, gain and mute. **Channels** lets you choose a channel to edit its default pan, volume and color.
 
-All **177 constructor-defined settings** from the source audit are represented. Categories include Playback, Audio, Timing, Chips, Mixer, Channels, Display, Compatibility and Diagnostics. Sample precision remains fixed at 16 bits, as in NSFPlay; foobar2000 receives floating-point audio and controls hardware output precision.
+Tab through the native controls. Press Space to toggle a checkbox and use the arrow keys within a radio group. Text, numeric and color values use edit boxes. Colors also have a picker. On the main **NSFPlay** page, search by name or settings key, choose a result from **Parameter**, and Tab to its editor. The main page also contains preset and import/export controls.
+
+**Apply** saves pending edits across pages. **Reset** stages defaults for the current page, or for all settings on the main NSFPlay page. All 177 settings are available through the main search and assigned to a child page. Sample precision is fixed at 16 bits in the engine. foobar2000 receives floating-point audio and controls hardware output precision.
 
 - Initial defaults remain 48 kHz stereo, quality 10, default chip options, filters and gain. Fallback duration is 300 seconds plus a five-second fade; embedded NSFe timing and enabled sidecar overrides take precedence.
 - Live-capable settings are identified in the help text. Applying them updates the playing decoder. Format, region, patch, song ordering and initialization settings take effect after reopening a track. Playback restart/rescan requirements are reported to the host.
@@ -98,7 +100,7 @@ Optional integration tests copy an installed x64 player into an isolated workspa
 .\test-host.ps1 -Platform Win32 -FoobarDirectory 'C:\Program Files (x86)\foobar2000' -PlatformToolset v145
 ```
 
-The test-only component verifies portable mode/profile location before changing configuration. It checks host registration, audio chunks, subsongs, EOF, seeking, cancellation, sidecars, custom/multivalue metadata and ReplayGain. Results go to `build/host-validation/fixtures/host-smoke.txt` for x64 or `build/host-validation-Win32/fixtures/host-smoke.txt` for x86.
+The test-only component verifies portable mode/profile location before changing configuration. It checks host registration, audio chunks, subsongs, EOF, seeking, cancellation, sidecars, custom/multivalue metadata and ReplayGain. Results go to `build/host-validation-0.3/fixtures/host-smoke.txt` for x64 or `build/host-validation-0.3-Win32/fixtures/host-smoke.txt` for x86.
 
 Core smoke coverage includes 177 defaults, validation and INI round trips, high mask bits, mono and sample rate changes, loop policies, chip telemetry, queued controls, memory writes, concurrency, cancellation and Unicode sidecars. Synthetic fixtures exercise the base APU and VRC7.
 

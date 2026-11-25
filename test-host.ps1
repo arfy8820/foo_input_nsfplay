@@ -10,7 +10,7 @@ if (!$FoobarDirectory) {
     if ($Platform -eq 'Win32' -and ${env:ProgramFiles(x86)}) { $programFiles = ${env:ProgramFiles(x86)} }
     $FoobarDirectory = Join-Path $programFiles 'foobar2000'
 }
-$testDirectory = if ($Platform -eq 'Win32') { 'build/host-validation-Win32' } else { 'build/host-validation' }
+$testDirectory = if ($Platform -eq 'Win32') { 'build/host-validation-0.3-Win32' } else { 'build/host-validation-0.3' }
 $testRoot=Join-Path $root $testDirectory
 $fixtures=Join-Path $testRoot 'fixtures'
 $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'

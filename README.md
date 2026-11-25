@@ -1,4 +1,6 @@
-# NSFPlay input for foobar2000 0.2.4
+# NSFPlay input for foobar2000 0.3.0
+
+0.3.0 adds separate preference tree pages and one settings page per chip. Two-option settings use checkboxes, larger option sets use radio buttons, and the main NSFPlay page keeps parameter search and preset management.
 
 0.2.4 incorporates fixes to NSFPlay’s shared scratch buffers, load errors, metadata formatting, VRC7 initialization, and timing for files loaded from memory. A unified installer is available from GitHub Releases for both 32-bit and 64-bit foobar2000.
 

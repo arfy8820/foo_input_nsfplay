@@ -60,83 +60,141 @@ void drain() {
     MSG message;
     while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&message);DispatchMessageW(&message);}
 }
+HWND named_button(HWND window,const wchar_t* name,DWORD type) {
+    for(HWND control=nullptr;(control=FindWindowExW(window,control,L"BUTTON",nullptr))!=nullptr;)
+        if((GetWindowLongPtrW(control,GWL_STYLE)&BS_TYPEMASK)==type && accessible_name(control)==name)
+            return control;
+    throw std::runtime_error("Named preference button is missing");
+}
+HWND named_edit(HWND window,const wchar_t* name) {
+    for(HWND control=nullptr;(control=FindWindowExW(window,control,L"EDIT",nullptr))!=nullptr;)
+        if(accessible_name(control)==name)return control;
+    throw std::runtime_error("Named preference edit box is missing");
+}
+
+void close_page(preferences_page_instance::ptr& page) {
+    DestroyWindow(page->get_wnd());
+    page.release();
+    drain();
+}
+
 void run(HWND parent) {
     using namespace nsfplay_component;
-    service_impl_single_t<PreferencesPage> factory;
+    service_impl_single_t<PreferencesPage<>> factory;
+    service_impl_single_t<PreferencesPage<Page::fds>> fds_factory;
+    service_impl_single_t<PreferencesPage<Page::apu>> apu_factory;
+    service_impl_single_t<PreferencesPage<Page::playback>> playback_factory;
+    service_impl_single_t<PreferencesPage<Page::channels>> channels_factory;
+    require(factory.get_parent_guid()==preferences_page::guid_input &&
+            playback_factory.get_parent_guid()==preferences_guid &&
+            fds_factory.get_parent_guid()==chips_guid && apu_factory.get_parent_guid()==chips_guid,
+            "Preference pages have the wrong parent GUIDs");
+    for(const auto& parameter:parameters()) {
+        int count=0;
+        for(size_t i=1;i<std::size(page_info);++i)
+            count+=belongs(static_cast<Page>(i),parameter);
+        require(count==1,"A setting is missing or duplicated in the preference tree");
+    }
     auto callback=fb2k::service_new<Callback>();
     const auto original=saved;
     auto page=factory.instantiate(parent,callback);
     require(page.is_valid()&&IsWindow(page->get_wnd()),"Preferences factory failed to create a window");
-    const auto window=page->get_wnd();
-    const auto selector=GetDlgItem(window,Params);
-    const auto category=GetDlgItem(window,Category);
-    const auto search=GetDlgItem(window,Search);
+    auto window=page->get_wnd();
+    auto selector=GetDlgItem(window,Params);
+    auto search=GetDlgItem(window,Search);
     require(SendMessageW(selector,CB_GETCOUNT,0,0)==177,"Preferences did not populate all parameters");
     require(FindWindowExW(window,nullptr,WC_LISTVIEWW,nullptr)==nullptr,"Preferences still contains a list view");
-    require(accessible_name(category)==L"Category","Category combo box has the wrong accessible name");
     require(accessible_name(search)==L"Search parameters","Search field has the wrong accessible name");
     require(accessible_name(selector)==L"Parameter","Parameter combo box has the wrong accessible name");
     require(!(page->get_state()&preferences_state::changed),"Opening preferences changed configuration");
     require(saved==original&&saves==0,"Opening preferences wrote configuration");
     require(callback->notifications==0,"Initialization notified the host about a user edit");
 
-    // These native controls send synchronous EN_CHANGE and selection notifications.
     SetWindowTextW(search,L"MASTER_VOLUME");
     require(SendMessageW(selector,CB_GETCOUNT,0,0)==1,"Parameter search did not rebuild the selector");
-    SetWindowTextW(GetDlgItem(window,Value),L"99");
+    const auto gain=named_edit(window,L"Master gain");
+    require(GetNextDlgTabItem(window,selector,FALSE)==gain,"Tab from search result skipped the editor");
+    SetWindowTextW(gain,L"99");
     require(page->get_state()&preferences_state::changed,"Editing master volume did not mark preferences dirty");
-    page->apply();
-    require(saved.at("MASTER_VOLUME")=="99"&&saves==1,"Apply did not persist the edited setting");
-    require(!(page->get_state()&preferences_state::changed),"Apply did not clear the dirty state");
+    close_page(page);
 
-    SetWindowTextW(GetDlgItem(window,Value),L"9999");
+    page=fds_factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    require(!GetDlgItem(window,Search)&&!GetDlgItem(window,Params),"Chip page contains a search or parameter selector");
+    const auto cutoff=named_edit(window,L"Low-pass cutoff (Hz)");
+    const auto reset=named_button(window,L"Reset on $4085",BS_AUTOCHECKBOX);
+    const auto protect=named_button(window,L"Write protect",BS_AUTOCHECKBOX);
+    require(GetNextDlgTabItem(window,reset,FALSE)==protect || GetNextDlgTabItem(window,protect,TRUE)==reset,
+            "FDS checkboxes are outside the expected tab order");
+    SetWindowTextW(cutoff,L"2400");
+    SendMessageW(reset,BM_CLICK,0,0);
+    SendMessageW(protect,BM_CLICK,0,0);
+    require(saved==original && saves==0,"Switching pages saved pending changes");
+    close_page(page);
+
+    page=playback_factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    const auto stereo=named_button(window,L"Stereo (Output channels)",BS_AUTOCHECKBOX);
+    require(SendMessageW(stereo,BM_GETCHECK,0,0)==BST_CHECKED,"Two-option checkbox did not reflect stereo");
+    SendMessageW(stereo,BM_CLICK,0,0);
+    const auto rate=named_button(window,L"44100",BS_AUTORADIOBUTTON);
+    const auto previous_rate=named_button(window,L"48000",BS_AUTORADIOBUTTON);
+    require((GetWindowLongPtrW(previous_rate,GWL_STYLE)&WS_TABSTOP)!=0,"Selected radio button is outside the tab order");
+    SendMessageW(rate,BM_CLICK,0,0);
+    require(SendMessageW(rate,BM_GETCHECK,0,0)==BST_CHECKED &&
+            SendMessageW(previous_rate,BM_GETCHECK,0,0)==BST_UNCHECKED,"Radio buttons were not mutually exclusive");
+    SetWindowPos(window,nullptr,0,0,480,250,SWP_NOZORDER|SWP_NOACTIVATE);
+    const auto fast_seek=named_button(window,L"Fast seek",BS_AUTOCHECKBOX);
+    SendMessageW(fast_seek,WM_SETFOCUS,0,0);
+    SCROLLINFO scroll{sizeof(scroll),SIF_POS};
+    GetScrollInfo(window,SB_VERT,&scroll);
+    require(scroll.nPos>0,"Focusing a control below the viewport did not scroll to it");
+    require(page->get_state()&preferences_state::needs_restart_playback,"Playback change did not request restart");
+    page->apply();
+    require(saved.at("RATE")=="44100" && saved.at("NCH")=="1" &&
+            saved.at("FDS_OPTION0")=="2400" && saved.at("FDS_OPTION1")=="1" && saved.at("FDS_OPTION2")=="1" &&
+            saved.at("MASTER_VOLUME")=="99" && saves==1,"Apply did not save edits from all pages together");
+    require(!(page->get_state()&preferences_state::changed),"Apply did not clear the dirty state");
+    close_page(page);
+
+    page=apu_factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    named_button(window,L"Pulse: Unmute on reset",BS_AUTOCHECKBOX);
+    named_button(window,L"Triangle, noise and DPCM: Unmute on reset",BS_AUTOCHECKBOX);
+    close_page(page);
+
+    page=channels_factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    auto channel=GetDlgItem(window,ChannelSelect);
+    require(accessible_name(channel)==L"Sound channel" && SendMessageW(channel,CB_GETCOUNT,0,0)==32,
+            "Channel defaults list is missing channels");
+    select_combo(channel,31);
+    named_edit(window,L"VRC7 9 / PAN");
+    close_page(page);
+
+    page=fds_factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    SetWindowTextW(named_edit(window,L"Low-pass cutoff (Hz)"),L"invalid");
+    close_page(page);
+    page=factory.instantiate(parent,callback);
+    window=page->get_wnd();
+    search=GetDlgItem(window,Search);
+    selector=GetDlgItem(window,Params);
+    SetWindowTextW(search,L"FDS_OPTION0");
+    require(text_of(named_edit(window,L"Low-pass cutoff (Hz)"))=="invalid","Switching pages lost the pending invalid edit");
     require(!(page->get_state()&preferences_state::changed),"Invalid input left Apply enabled");
-    require(saved.at("MASTER_VOLUME")=="99","Invalid input changed configuration");
     page->reset();
     require(page->get_state()&preferences_state::changed,"Reset did not preview defaults");
-    page->apply();require(saved.at("MASTER_VOLUME")=="128","Reset/Apply did not restore the default");
-    require(callback->notifications>0,"Preferences did not notify the host callback");
+    page->apply();
+    require(saved==original,"Reset/Apply did not restore all defaults");
 
     SetWindowTextW(search,L"no-matching-parameter");
     require(!IsWindowEnabled(selector),"Empty search left a focusable parameter selector");
-    for(int id:{Value,Choices,PickColor})require(!(GetWindowLongPtrW(GetDlgItem(window,id),GWL_STYLE)&WS_VISIBLE),"Empty search left an unrelated editor visible");
     require(text_of(GetDlgItem(window,Help))=="No parameters match the search.","Empty search has no feedback");
-
     SetWindowTextW(search,L"");
-    for(int i=0;i<177;++i) {
-        select_combo(selector,i);
-        const auto& parameter=parameters()[i];
-        const bool combo=parameter.kind==ParamKind::choice||parameter.kind==ParamKind::boolean;
-        require(text_of(GetDlgItem(window,combo?ChoiceLabel:ValueLabel))==parameter.label,"Selected parameter has the wrong editor label");
-    }
-    const auto fds=SendMessageW(category,CB_FINDSTRINGEXACT,-1,reinterpret_cast<LPARAM>(L"Chip FDS"));
-    select_combo(category,static_cast<int>(fds));
-    require(SendMessageW(selector,CB_GETCOUNT,0,0)==3,"FDS category does not expose all three options");
-    COMBOBOXINFO info={sizeof(info)};
-    require(GetComboBoxInfo(selector,&info)!=FALSE,"Could not get the FDS dropdown");
-    require(accessible_name(info.hwndList,1)==L"Low-pass cutoff (Hz)","FDS cutoff is not exposed to accessibility");
-    require(accessible_name(info.hwndList,2)==L"Reset on $4085","FDS reset option is not exposed to accessibility");
-    require(accessible_name(info.hwndList,3)==L"Write protect","FDS write protect is not exposed to accessibility");
-
-    select_combo(selector,0);
-    const auto value=GetDlgItem(window,Value);
-    require(accessible_name(value)==L"Low-pass cutoff (Hz)","FDS cutoff editor has the wrong accessible name");
-    require(GetNextDlgTabItem(window,selector,FALSE)==value,"Tab did not reach the FDS cutoff editor");
-    SetWindowTextW(value,L"2400");
-    const auto choices=GetDlgItem(window,Choices);
-    for(const auto* name:{L"Reset on $4085",L"Write protect"}) {
-        SendMessageW(selector,WM_KEYDOWN,VK_DOWN,0);
-        require(accessible_name(choices)==name,"Arrow key did not select and label the next FDS option");
-        require(GetNextDlgTabItem(window,selector,FALSE)==choices,"Tab did not reach the FDS option editor");
-        select_combo(choices,1);
-    }
-    page->apply();
-    require(saved.at("FDS_OPTION0")=="2400"&&saved.at("FDS_OPTION1")=="1"&&saved.at("FDS_OPTION2")=="1","Apply did not persist all three FDS options");
-    drain();
-    // This is the SDK contract: the host destroys the window before releasing
-    // its final reference to preferences_page_instance.
-    DestroyWindow(window);page.release();drain();
-    require(!IsWindow(window),"Preferences window survived destruction");
+    for(int i=0;i<177;++i)select_combo(selector,i);
+    close_page(page);
+    require(callback->notifications>0,"Preferences did not notify the host callback");
 }
 void check_inspector_pages(HWND window) {
     using namespace nsfplay_component;
@@ -235,11 +293,12 @@ int main(int argc,char** argv) {
         for(int i=0;i<12;++i) {saved=nsfplay_component::defaults();saves=0;run(parent);}
         {
             using namespace nsfplay_component;
-            service_impl_single_t<PreferencesPage> factory;
+            service_impl_single_t<PreferencesPage<>> factory;
             auto callback=fb2k::service_new<Callback>();
             auto page=factory.instantiate(parent,callback);const auto window=page->get_wnd();
             callback->on_change=[&]{DestroyWindow(window);page.release();};
-            SetWindowTextW(GetDlgItem(window,Search),L"LPF");drain();
+            SetWindowTextW(GetDlgItem(window,Search),L"LPF");
+            SetWindowTextW(named_edit(window,L"Low-pass filter"),L"150");drain();
             require(!page.is_valid()&&!IsWindow(window),"Reentrant host closure was not handled safely");
             service_impl_single_t<InspectorElement> element;
             for(int i=0;i<8;++i) {

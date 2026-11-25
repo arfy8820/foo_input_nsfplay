@@ -18,6 +18,7 @@ foreach ($architecture in $architectures) {
     $entries.Add($entry, $dll)
 }
 $entries.Add('README.md', (Join-Path $root 'README.md'))
+$entries.Add('LICENSE', (Join-Path $root 'LICENSE'))
 $entries.Add('USER_GUIDE.md', (Join-Path $root 'USER_GUIDE.md'))
 $entries.Add('VALIDATION.md', (Join-Path $root 'VALIDATION.md'))
 $entries.Add('notices/nsfplay-readme.txt', (Join-Path $root '../bbbradsmith/nsfplay/readme.txt'))
