@@ -18,3 +18,9 @@ Install `foo_input_nsfplay-unified.fb2k-component` through **Preferences > Compo
 - Optional isolated host-service tests: `test-host.ps1`.
 
 See [USER_GUIDE.md](USER_GUIDE.md) for usage, compatibility and defaults, and [VALIDATION.md](VALIDATION.md) for test results.
+
+## License
+
+The original foobar2000 wrapper code in this repository is available under the [MIT License](LICENSE).
+
+The NSFPlay engine has its own [upstream reuse terms and notices](https://github.com/bbbradsmith/nsfplay/blob/6af5406e3325b5507bea1ae1a57c77d5efe5c7f3/readme.txt). The [engine patch series](patches/nsfplay/) preserves the patch authors' attribution. Release packages include the upstream NSFPlay notice and the separate foobar2000 SDK and PFC notices. See [Source and notices](USER_GUIDE.md#source-and-notices) for the engine revision and notice locations.
